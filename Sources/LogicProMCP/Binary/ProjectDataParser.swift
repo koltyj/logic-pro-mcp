@@ -372,10 +372,10 @@ enum ProjectDataParser {
                 text = text.replacingOccurrences(of: ".", with: "")
                 text = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 // Remove leading/trailing non-alphanumeric
-                while text.first != nil && !text.first!.isLetter && !text.first!.isNumber {
+                while let c = text.first, !c.isLetter && !c.isNumber {
                     text.removeFirst()
                 }
-                while text.last != nil && !text.last!.isLetter && !text.last!.isNumber {
+                while let c = text.last, !c.isLetter && !c.isNumber {
                     text.removeLast()
                 }
                 return text.isEmpty ? nil : text
@@ -903,20 +903,17 @@ enum ProjectDataParser {
 
     // MARK: - Track-to-Region Mapping
 
-    /// Populate trackOid on regions and regions list on tracks using the AuRg body scanning
-    /// heuristic described in reference/LOGIC_BINARY_SPEC.md and python_extractor_snippets.txt.
+    /// Populate trackOid on regions and regions list on tracks.
     ///
-    /// Bug 1 Fix: Replace Song/USEl table scan with AuRg body offset heuristic.
+    /// Two-source approach (priority order):
+    ///   1. **Trak body scan** (primary): Trak chunk bodies may contain AuRg OIDs after the
+    ///      fixed header fields. Scan from offset 0x2C onwards for u32 values matching known
+    ///      region OIDs and build trakOid → [regionOid] mapping.
+    ///   2. **AuRg body offset heuristic** (fallback): Group AuRg bodies by length, find the
+    ///      offset where track OIDs appear most frequently, use that to read trackOid per region.
     ///
-    /// Algorithm:
-    ///   1. Collect known track OIDs from MSeq chunks.
-    ///   2. For each AuRg chunk body, group by body length.
-    ///   3. For each length group, scan u32 values at candidate offsets
-    ///      (0x00, 0x04, 0x08, 0x0C, 0x60, 0x64, 0x68) counting how many bodies
-    ///      contain a known track OID at that offset.
-    ///   4. Use the highest-scoring offset as the track reference for that length group.
-    ///   5. Fallback: wide scan every 4 bytes from 0x00 to 0xC0 when no candidate offset wins.
-    ///   6. Set trackOid on each ParsedRegion; leave nil if no match.
+    /// Regions are matched to AuRg chunk bodies by composite key (oid, startTick) rather than
+    /// sequential index, avoiding drift when extractRegions skips chunks with no timing/name.
     private static func applyTrackRegionMapping(
         chunks: [ChunkInfo],
         data: Data,
@@ -926,29 +923,126 @@ enum ProjectDataParser {
         let trackOidSet = Set(tracks.map { UInt32($0.oid) })
         guard !trackOidSet.isEmpty, !regions.isEmpty else { return }
 
-        // Candidate offsets per spec: 0x00, 0x04, 0x08, 0x0C, 0x60, 0x64, 0x68 (and more)
-        // Include 0x00 — in AuRg bodies the first u32 can be a track OID reference.
+        // Build region lookup by composite key (oid, startTick) for robust chunk↔region matching.
+        // When multiple regions share a key, store the first unmatched index.
+        struct RegionKey: Hashable { let oid: Int; let startTick: Int }
+        var regionLookup: [RegionKey: [Int]] = [:]
+        for (i, r) in regions.enumerated() {
+            regionLookup[RegionKey(oid: r.oid, startTick: r.startTick), default: []].append(i)
+        }
+        // Track which indices have been consumed (for duplicate keys)
+        var consumedIndices = Set<Int>()
+
+        func findRegionIndex(oid: Int, startTick: Int) -> Int? {
+            let key = RegionKey(oid: oid, startTick: startTick)
+            guard let indices = regionLookup[key] else { return nil }
+            for idx in indices where !consumedIndices.contains(idx) {
+                consumedIndices.insert(idx)
+                return idx
+            }
+            return nil
+        }
+
+        // Collect all region OIDs for Trak body scanning
+        let regionOidSet = Set(regions.map { UInt32($0.oid) })
+
+        // --- Source 1: Trak body scan ---
+        // Trak bodies have fixed fields at 0x00-0x2B. Any u32 values from 0x2C onwards
+        // that match known AuRg OIDs are region references owned by that track.
+        var trakRegionOids: [UInt32: Set<UInt32>] = [:]  // trakOid → {regionOid}
+        for chunk in chunks where chunk.id == idTrak {
+            guard chunk.bodyLength > 0x30 else { continue }
+            let body = Data(data[chunk.bodyOffset..<(chunk.bodyOffset + chunk.bodyLength)])
+            var foundRegionOids = Set<UInt32>()
+            // Scan u32 values from offset 0x2C to end of body
+            var off = 0x2C
+            while off + 4 <= body.count {
+                let val = readLE32(body, at: off)
+                if val != 0 && regionOidSet.contains(val) {
+                    foundRegionOids.insert(val)
+                }
+                off += 4
+            }
+            if !foundRegionOids.isEmpty {
+                trakRegionOids[chunk.oid] = foundRegionOids
+            }
+        }
+
+        // Apply Trak-based mapping: Trak.oid maps to MSeq via trakEntries,
+        // and we need the MSeq OID (which is what ParsedTrack.oid uses).
+        // Build Trak OID → MSeq OID map from Trak chunks.
+        var trakToMSeq: [UInt32: UInt32] = [:]
+        for chunk in chunks where chunk.id == idTrak {
+            guard chunk.bodyLength >= 0x0C else { continue }
+            let body = Data(data[chunk.bodyOffset..<(chunk.bodyOffset + chunk.bodyLength)])
+            let mseqOid = readLE32(body, at: 0x08)
+            if mseqOid != 0 {
+                trakToMSeq[chunk.oid] = mseqOid
+            }
+        }
+
+        // Assign regions from Trak body scan
+        for (trakOid, regOids) in trakRegionOids {
+            let mseqOid = trakToMSeq[trakOid] ?? trakOid
+            guard trackOidSet.contains(mseqOid) else { continue }
+            for regOid in regOids {
+                // Mark all regions with this OID as belonging to this track
+                for i in regions.indices where regions[i].oid == Int(regOid) && regions[i].trackOid == nil {
+                    regions[i].trackOid = Int(mseqOid)
+                }
+            }
+        }
+
+        // --- Source 2: AuRg body offset heuristic (fallback for unmapped regions) ---
+
         let candidateOffsets: [Int] = [0x00, 0x04, 0x08, 0x0C, 0x60, 0x64, 0x68,
                                        0x10, 0x14, 0x18, 0x1C, 0x20, 0x24, 0x28,
                                        0x2C, 0x30, 0x34, 0x38, 0x3C, 0x40, 0x44,
                                        0x48, 0x4C, 0x50, 0x54, 0x58, 0x5C,
                                        0x6C, 0x70, 0x74, 0x78, 0x7C]
 
-        // Collect all AuRg (body, regionIdx) pairs in chunk order
+        // Collect AuRg (body, regionIdx) pairs using composite key matching
+        // instead of sequential index, avoiding drift from skipped chunks.
         var aurgBodies: [(body: Data, regionIdx: Int)] = []
-        var regionIdx = 0
         for chunk in chunks where chunk.id == idAuRg {
             guard chunk.bodyLength > 0x4C else { continue }
             let body = Data(data[chunk.bodyOffset..<(chunk.bodyOffset + chunk.bodyLength)])
-            if regionIdx < regions.count {
-                aurgBodies.append((body: body, regionIdx: regionIdx))
-                regionIdx += 1
+
+            // Extract timing to compute composite key (same logic as extractRegions)
+            var startTick = 0
+            if body.count >= 0x38 {
+                let rawStartTick = Int(readLE64(body, at: 0x30))
+                let legacyBar = rawStartTick / ticksPerBar + 1
+                if rawStartTick > 0 && legacyBar >= 1 && legacyBar <= 5000 {
+                    startTick = rawStartTick
+                }
+            }
+            if startTick == 0 {
+                let startBarInt = readLE32(body, at: 0x10)
+                let startBarFracRaw = readLE32(body, at: 0x14)
+                let startBarFrac = Double(startBarFracRaw >> 16) / 65536.0
+                let candidateBar = Double(startBarInt) + startBarFrac
+                if (startBarInt > 0 || startBarFrac > 0) && candidateBar <= 5000.0 {
+                    startTick = Int((candidateBar - 1.0) * Double(ticksPerBar))
+                }
+            }
+
+            if let regIdx = findRegionIndex(oid: Int(chunk.oid), startTick: startTick) {
+                aurgBodies.append((body: body, regionIdx: regIdx))
             }
         }
 
-        // Group by body length
+        // Only process regions not yet mapped by Trak scan
+        let unmappedBodies = aurgBodies.filter { regions[$0.regionIdx].trackOid == nil }
+        guard !unmappedBodies.isEmpty else {
+            // All mapped by Trak scan — just build cross-reference and return
+            buildTrackRegionCrossRef(tracks: &tracks, regions: regions)
+            return
+        }
+
+        // Group unmapped by body length
         var byLength: [Int: [(body: Data, regionIdx: Int)]] = [:]
-        for entry in aurgBodies {
+        for entry in unmappedBodies {
             byLength[entry.body.count, default: []].append(entry)
         }
 
@@ -963,23 +1057,20 @@ enum ProjectDataParser {
                 let maxScan = min(entry.body.count, 0xC0)
                 for off in candidateOffsets where off + 4 <= maxScan {
                     let val = readLE32(entry.body, at: off)
-                    // Exclude OID=0 to avoid false hits (many fields default to 0)
                     if trackOidSet.contains(val) && val != 0 {
                         hitCounts[off, default: 0] += 1
                     }
                 }
             }
 
-            // Accept offset if ratio >= 0.15 or count >= 2 (lower threshold to catch sparse groups)
             let filtered = hitCounts.filter { $0.value * 20 >= total * 3 || $0.value >= 2 }
             if let best = filtered.max(by: { $0.value < $1.value }) {
-                let len = group.first!.body.count
+                let len = group.first?.body.count ?? 0
                 bestOffsetByLength[len] = best.key
             }
         }
 
-        // Pass 2: if still no good offset for a length group, do wider scan (every 4 bytes from 0x00)
-        // Python: range(0, max_scan, 4) — includes offset 0
+        // Pass 2: wider scan for groups with no good offset
         for (len, group) in byLength {
             guard bestOffsetByLength[len] == nil else { continue }
             let total = group.count
@@ -996,14 +1087,13 @@ enum ProjectDataParser {
                 }
             }
 
-            // For wide scan, keep top offset with any hits (even 1 hit for single-region groups)
             if let best = hitCounts.max(by: { $0.value < $1.value }), best.value > 0 {
                 bestOffsetByLength[len] = best.key
             }
         }
 
-        // Assign track OIDs to regions
-        for entry in aurgBodies {
+        // Assign track OIDs to unmapped regions
+        for entry in unmappedBodies {
             let len = entry.body.count
             guard let bestOff = bestOffsetByLength[len], bestOff + 4 <= len else { continue }
             let val = readLE32(entry.body, at: bestOff)
@@ -1012,6 +1102,14 @@ enum ProjectDataParser {
         }
 
         // Build track -> regions cross-reference
+        buildTrackRegionCrossRef(tracks: &tracks, regions: regions)
+    }
+
+    /// Build track.regions arrays from region.trackOid assignments.
+    private static func buildTrackRegionCrossRef(
+        tracks: inout [ParsedTrack],
+        regions: [ParsedRegion]
+    ) {
         var trackRegionMap: [Int: [ParsedRegion]] = [:]
         for region in regions {
             if let tOid = region.trackOid {
@@ -1648,7 +1746,7 @@ enum ProjectDataParser {
                 stacks.append(SubTrackStack(
                     name: fg,
                     source: "function_group",
-                    strips: fgMap[fg]!.sorted { $0.name < $1.name }
+                    strips: (fgMap[fg] ?? []).sorted { $0.name < $1.name }
                 ))
             }
         }
@@ -2355,7 +2453,7 @@ func findMostRecentLogicxFile() -> String? {
         if url.pathExtension == "logicx" {
             if let attrs = try? fm.attributesOfItem(atPath: url.path),
                let modDate = attrs[.modificationDate] as? Date {
-                if best == nil || modDate > best!.date {
+                if best.map({ modDate > $0.date }) ?? true {
                     best = (url.path, modDate)
                 }
             }
@@ -2373,7 +2471,7 @@ func findMostRecentLogicxFile() -> String? {
             if child.pathExtension == "logicx" {
                 if let attrs = try? fm.attributesOfItem(atPath: child.path),
                    let modDate = attrs[.modificationDate] as? Date {
-                    if best == nil || modDate > best!.date {
+                    if best.map({ modDate > $0.date }) ?? true {
                         best = (child.path, modDate)
                     }
                 }
