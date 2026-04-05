@@ -85,3 +85,164 @@ This log captures concrete findings from `ProjectData` analysis, including disco
       - Values do not map to file offsets or `PluginData` indices.
       - **Conclusion**: The fields likely contain a hash or opaque Object ID that references an internal runtime object not serialized in a simple table.
       - **Recommendation**: Rely on `EvSq` for absolute timing. Use Song Graph only for topological sequencing (A -> B).
+
+## Project Alternatives (2026-04-05)
+
+### Overview
+
+Logic Pro's "Project Alternatives" feature allows users to save multiple variations of a project (different arrangements, mixes, etc.) within a single `.logicx` bundle. All alternatives share the same audio assets but maintain independent project state (track configuration, mix settings, arrangement, UI layout).
+
+### Bundle Structure
+
+A `.logicx` bundle is a macOS package directory with this structure:
+
+```
+MyProject.logicx/
+  Resources/
+    ProjectInformation.plist        # Bundle metadata, alternative names registry
+  Alternatives/
+    000/                            # First alternative (zero-indexed, zero-padded to 3 digits)
+      ProjectData                   # Binary project state (tracks, regions, mix, arrangement)
+      MetaData.plist                # Per-alternative metadata (tempo, key, track count, audio refs)
+      DisplayState.plist            # UI state as XML plist (screensets, inspector, editor layout)
+      DisplayStateArchive           # Same UI state as NSKeyedArchiver binary plist
+      WindowImage.jpg               # Thumbnail screenshot (1920xN JPEG, progressive)
+      Undo Data.nosync/             # Per-alternative undo history (.nosync prevents iCloud sync)
+        Trash/                      # Cleared undo data
+      Project File Backups/         # Rolling backup snapshots (up to 10 observed)
+        00/
+          ProjectData               # Backup copy of ProjectData
+          MetaData.plist            # Backup copy of MetaData
+        01/
+          ...
+        09/
+          ...
+    001/                            # Second alternative (if created)
+      ProjectData
+      MetaData.plist
+      ...
+  Media/
+    Audio Files/                    # SHARED across all alternatives
+      Record#01.aif
+      Record#02.aif
+      ...
+```
+
+### Key Findings
+
+#### 1. Alternative Directory Naming
+
+- Alternatives are stored as zero-padded 3-digit directories: `000`, `001`, `002`, etc.
+- The directory name is a simple sequential index, not an ID or hash.
+- All 14 projects examined on this system have only a single alternative (`000`), which is the default state when no additional alternatives have been created.
+
+#### 2. The 0xFFFFFFFF Sentinel Value
+
+Two projects (`Untitled.logicx` and `Untitled 1.logicx`) use the directory name `4294967295` (= `0xFFFFFFFF` = `UINT32_MAX`) instead of `000`.
+
+**Characteristics of sentinel-value projects:**
+- No `ProjectData` file (the directory contains only an empty `Undo Data.nosync/` folder)
+- No `Resources/` directory and no `ProjectInformation.plist`
+- No `Media/` directory
+- No `MetaData.plist`, `DisplayState.plist`, `DisplayStateArchive`, or `WindowImage.jpg`
+
+**Interpretation:** `0xFFFFFFFF` is a "never saved" / "no committed alternative" sentinel. These are projects that were created (Logic allocates the bundle directory structure on disk) but never saved by the user. Logic creates the `Alternatives/4294967295/` directory and `Undo Data.nosync/` immediately on project creation as a workspace for undo data, but the actual `ProjectData` is only written on first explicit save, at which point the sentinel directory would be replaced with `000/`. This is a classic use of `UINT32_MAX` as a "null" or "uninitialized" marker in a `UInt32` index space.
+
+#### 3. Shared Audio Files (Media Directory)
+
+- Audio files live in `<project>.logicx/Media/Audio Files/` at the **bundle root**, outside of any alternative.
+- All alternatives reference the same shared pool of audio files.
+- The `MetaData.plist` inside each alternative lists which audio files are actively used (`AudioFiles` key) vs unused (`UnusedAudioFiles` key), with paths relative to `Media/` (e.g., `"Audio Files/Record#22.aif"`).
+- This means switching alternatives changes the project state but never duplicates audio data.
+
+#### 4. Active Alternative Tracking via ProjectInformation.plist
+
+The active alternative is tracked in `Resources/ProjectInformation.plist` at the bundle root. Key fields:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `BundleVersion` | Integer | Always `2` in observed projects |
+| `LastSavedFrom` | String | Logic version string (e.g., `"Logic Pro X 10.7.7 (5762)"`) |
+| `HasProjectFolder` | Boolean | Whether project uses a project folder |
+| `projectAssetFlags` | Integer | Asset management flags (observed: `8265`) |
+| `VariantNames` | Dictionary | **Maps alternative index to display name** |
+| `VariantNamesV2` | Dictionary | **Maps alternative index to name template** |
+| `ExternalRecordPath` | Data | Bookmark data for external recording path (optional) |
+
+**`VariantNames`** is the critical field for alternatives:
+- Keys are string-encoded alternative indices (`"0"`, `"1"`, `"2"`, ...) that correspond to directory names (`000`, `001`, `002`, ...)
+- Values are user-visible alternative names (e.g., `"test"`, `"RiffIdea"`, `"Mix A"`)
+- Single-alternative projects have just `{"0": "<project_name>"}`
+
+**`VariantNamesV2`** uses the same key structure but with template tokens:
+- `"{PROJECT_NAME}"` means the alternative name matches the project filename
+- Custom names would appear as literal strings here
+
+**Note:** There is no explicit "active alternative index" field in this plist. The active alternative is likely determined by:
+1. The most recently modified `ProjectData` file (by filesystem timestamp)
+2. Runtime state maintained by Logic Pro in memory (not persisted to a separate field)
+3. Possibly encoded within the `ProjectData` binary itself
+
+Since all observed projects have only one alternative, the active-tracking mechanism for multi-alternative projects could not be directly confirmed. The `VariantNames` dictionary key set implicitly defines which alternatives exist.
+
+#### 5. Per-Alternative State Breakdown
+
+Each alternative directory contains independent copies of:
+
+| File | Format | Content |
+|------|--------|---------|
+| `ProjectData` | Custom binary (magic: `23 47 C0 AB`) | Full project state: tracks, regions, plugins, mixer, arrangement markers, tempo map |
+| `MetaData.plist` | XML plist | Summary metadata: BPM, key, time sig, sample rate, track count, audio file references |
+| `DisplayState.plist` | XML plist | UI state: screensets, window frames, inspector visibility, editor positions, zoom levels |
+| `DisplayStateArchive` | Binary plist (NSKeyedArchiver) | Same UI state as `DisplayState.plist` but in archived binary format |
+| `WindowImage.jpg` | JPEG (progressive, 1920px wide) | Thumbnail screenshot of project window (used in Finder Quick Look and alternative picker) |
+| `Undo Data.nosync/` | Directory | Per-alternative undo history; `.nosync` suffix prevents iCloud Drive sync |
+| `Project File Backups/` | Directory (00-09) | Rolling auto-save backups, each containing `ProjectData` + `MetaData.plist` |
+
+#### 6. ProjectData Binary Header Comparison
+
+All `ProjectData` files share the same magic bytes and overall structure:
+
+```
+Offset  test.logicx/000    RiffIdea.logicx/000   Backup 00 (test)
+0x00    23 47 C0 AB        23 47 C0 AB            23 47 C0 AB         (magic)
+0x04    C6 09              C9 09                  C6 09               (version/flags)
+0x06    03 00 04 00 00 00  03 00 04 00 00 00      03 00 04 00 00 00   (common header)
+0x0C    01 00 08 00        01 00 08 00            01 00 08 00         (common header)
+0x10    9F 9D 2A 00        58 AF 29 00            08 69 2A 00         (varies: file size or checksum)
+0x18    67 6E 6F 53        67 6E 6F 53            67 6E 6F 53         ("gnoS" = "Song" reversed)
+```
+
+The version byte at offset `0x04` differs between Logic versions (`C6 09` for 10.7.4, `C9 09` for 10.7.7). The value at `0x10-0x13` varies per save and likely represents a content-dependent size or hash.
+
+#### 7. Programmatic Switching Feasibility
+
+**AppleScript:** Logic Pro has minimal AppleScript support. There is no documented AppleScript command to switch alternatives. The File > Project Alternatives menu is the primary UI for switching.
+
+**Accessibility API:** The Alternatives submenu can be navigated via System Events / Accessibility:
+- Menu path: `File > Project Alternatives > [alternative name]`
+- This is the most viable programmatic approach for switching alternatives at runtime.
+
+**Direct file manipulation (offline):** Since the active alternative is not explicitly stored in a single field:
+- Modifying `ProjectInformation.plist` alone is insufficient to switch alternatives.
+- Logic reads the `ProjectData` from the alternative directory on project open; the mechanism for selecting which directory to read is internal to Logic.
+- **Safest offline approach**: Rename/swap alternative directories (e.g., rename `001/` to `000/` and vice versa), but this is fragile and risks data corruption.
+
+**Recommendation for MCP integration:**
+1. **Runtime switching**: Use Accessibility API to navigate `File > Project Alternatives > [name]` menu.
+2. **Reading alternative data**: The existing `ProjectDataParser.findProjectData()` already scans `Alternatives/000` through `Alternatives/009` with a fallback directory scan. It could be extended to enumerate all alternatives and parse each independently.
+3. **Listing alternatives**: Parse `Resources/ProjectInformation.plist` `VariantNames` dictionary to get the name-to-index mapping without opening each `ProjectData`.
+
+### Summary Table
+
+| Aspect | Finding |
+|--------|---------|
+| Storage location | `<project>.logicx/Alternatives/<NNN>/` (zero-padded 3-digit index) |
+| Audio sharing | All alternatives share `<project>.logicx/Media/Audio Files/` |
+| Name registry | `Resources/ProjectInformation.plist` > `VariantNames` dict |
+| Active tracking | No explicit persisted field found; likely runtime/implicit |
+| Sentinel 0xFFFFFFFF | "Never saved" placeholder for newly created, unsaved projects |
+| Per-alternative state | `ProjectData` (binary), `MetaData.plist`, `DisplayState.plist`, `DisplayStateArchive`, `WindowImage.jpg` |
+| Backups | Up to 10 rolling backups per alternative in `Project File Backups/00-09/` |
+| Programmatic switching | Accessibility API menu navigation is most viable; no AppleScript support |
+| Parser support | `ProjectDataParser.findProjectData()` already handles multi-alternative scanning |
