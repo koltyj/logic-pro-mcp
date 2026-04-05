@@ -19,6 +19,8 @@ struct ProjectDataInfo: Sendable, Codable {
     var audioFiles: [ParsedAudioFile] = []
     /// Plugin names discovered in PluginData (null-ID) chunks.
     var plugins: [String] = []
+    /// Detailed plugin records with type and manufacturer info.
+    var parsedPlugins: [ParsedPlugin] = []
     /// Time signature string (e.g. "4/4"), sourced from plists in the package.
     var timeSignature: String = "4/4"
     /// Sample rate from project plist (0 if unavailable).
@@ -213,4 +215,18 @@ struct SongLength: Sendable, Codable {
     ///   "reference_region"  — taken from a matching reference track region
     ///   "marker_boundary"   — marker-to-next-marker fallback
     var source: String
+}
+
+// MARK: - Plugins
+
+/// A plugin discovered in the project binary.
+struct ParsedPlugin: Sendable, Codable {
+    /// Plugin name (e.g. "Channel EQ", "Serum", "FabFilter Pro-Q 3").
+    var name: String
+    /// Plugin type: "au_builtin", "au_thirdparty", "au_component", or "unknown".
+    var type: String
+    /// Manufacturer name when available (e.g. "Apple", "FabFilter", "Xfer Records").
+    var manufacturer: String?
+    /// AU component 4-char codes when found: (type, subtype, manufacturer).
+    var auComponentCode: String?
 }

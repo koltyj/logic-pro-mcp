@@ -139,6 +139,7 @@ enum ProjectDataParser {
 
         // Extract plugin list
         let plugins = extractPlugins(chunks: chunks, data: data)
+        let parsedPlugins = extractDetailedPlugins(chunks: chunks, data: data)
 
         // Extract Trak chunks (arrangement track → MSeq linkage)
         let trakEntries = extractTrakChunks(chunks: chunks, data: data)
@@ -173,6 +174,7 @@ enum ProjectDataParser {
         info.regions = regions
         info.audioFiles = audioFiles
         info.plugins = plugins
+        info.parsedPlugins = parsedPlugins
         info.timeSignature = timeSignature
         info.sampleRate = sampleRate
         info.projectName = projectName
@@ -1849,83 +1851,217 @@ enum ProjectDataParser {
 
     // MARK: - Plugin List
 
-    /// Extract plugin names by scanning ALL chunk bodies for known plugin name strings,
-    /// and scanning PluginData (null-ID) chunks for printable ASCII strings > 4 chars.
+    /// Extract plugins using multiple strategies:
+    ///   1. Known plugin name keyword matching across all chunks
+    ///   2. AU component code scanning (4-char type/subtype/manufacturer codes)
+    ///   3. PluginData (null-ID) chunk ASCII string extraction
+    ///   4. AuCO body scanning for embedded plugin references
     ///
-    /// Bug 4 Fix:
-    ///   - reverseID() now maps non-printable IDs to "PluginData" so they are no longer skipped.
-    ///   - PluginData chunks are scanned for all printable ASCII strings > 4 chars.
-    ///   - We also scan ALL chunks (not just "PluginData") for known plugin name strings.
-    ///   - Extended known plugin list per spec.
+    /// Returns (names: [String], detailed: [ParsedPlugin]).
     private static func extractPlugins(chunks: [ChunkInfo], data: Data) -> [String] {
-        var plugins = Set<String>()
+        let detailed = extractDetailedPlugins(chunks: chunks, data: data)
+        return detailed.map { $0.name }.sorted()
+    }
 
-        // Known plugin name keywords to search for (per spec + user requirement)
-        let knownPlugins: [String] = [
+    private static func extractDetailedPlugins(chunks: [ChunkInfo], data: Data) -> [ParsedPlugin] {
+        var pluginMap: [String: ParsedPlugin] = [:]  // name -> plugin (dedup)
+
+        // --- Comprehensive known plugin catalog ---
+        // Map: keyword → (type, manufacturer)
+        let knownPluginCatalog: [(keyword: String, type: String, manufacturer: String?)] = [
             // Logic built-ins
-            "Compressor", "Channel EQ", "Space Designer", "Alchemy", "Klopfgeist",
-            "Delay Designer", "Retro Synth", "Gain", "Limiter", "Multipressor",
+            ("Compressor", "au_builtin", "Apple"),
+            ("Channel EQ", "au_builtin", "Apple"),
+            ("Space Designer", "au_builtin", "Apple"),
+            ("Alchemy", "au_builtin", "Apple"),
+            ("Klopfgeist", "au_builtin", "Apple"),
+            ("Delay Designer", "au_builtin", "Apple"),
+            ("Retro Synth", "au_builtin", "Apple"),
+            ("Limiter", "au_builtin", "Apple"),
+            ("Multipressor", "au_builtin", "Apple"),
+            ("Tape Delay", "au_builtin", "Apple"),
+            ("Chromaverb", "au_builtin", "Apple"),
+            ("Phat FX", "au_builtin", "Apple"),
+            ("Step FX", "au_builtin", "Apple"),
+            ("Vintage EQ", "au_builtin", "Apple"),
+            ("Vintage Console", "au_builtin", "Apple"),
+            ("Linear Phase EQ", "au_builtin", "Apple"),
+            ("Match EQ", "au_builtin", "Apple"),
+            ("Amp Designer", "au_builtin", "Apple"),
+            ("Bass Amp Designer", "au_builtin", "Apple"),
+            ("Pedalboard", "au_builtin", "Apple"),
+            ("Sampler", "au_builtin", "Apple"),
+            ("Quick Sampler", "au_builtin", "Apple"),
+            ("Drum Machine Designer", "au_builtin", "Apple"),
+            ("Ultrabeat", "au_builtin", "Apple"),
+            ("ES2", "au_builtin", "Apple"),
+            ("EXS24", "au_builtin", "Apple"),
+            ("EVB3", "au_builtin", "Apple"),
+            ("Sculpture", "au_builtin", "Apple"),
+            ("AutoFilter", "au_builtin", "Apple"),
+            ("EVOC 20", "au_builtin", "Apple"),
+            ("Ringshifter", "au_builtin", "Apple"),
+            ("Vocal Transformer", "au_builtin", "Apple"),
+            ("Pitch Shifter", "au_builtin", "Apple"),
+            ("Tremolo", "au_builtin", "Apple"),
+            ("Scanner Vibrato", "au_builtin", "Apple"),
+            ("Phaser", "au_builtin", "Apple"),
+            ("Flanger", "au_builtin", "Apple"),
+            ("Chorus", "au_builtin", "Apple"),
+            ("Ensemble", "au_builtin", "Apple"),
+            ("Gain", "au_builtin", "Apple"),
             // Third-party
-            "Serum", "Kontakt", "Neural DSP", "FabFilter", "Valhalla", "Waves", "iZotope",
-            "Slate", "Massive", "Diva", "Sylenth", "Omnisphere", "Nexus", "Spire",
-            "Vital", "Pigments", "Saturn", "Vintage", "Native Instruments",
+            ("Serum", "au_thirdparty", "Xfer Records"),
+            ("Kontakt", "au_thirdparty", "Native Instruments"),
+            ("Neural DSP", "au_thirdparty", "Neural DSP"),
+            ("FabFilter", "au_thirdparty", "FabFilter"),
+            ("Pro-Q", "au_thirdparty", "FabFilter"),
+            ("Pro-L", "au_thirdparty", "FabFilter"),
+            ("Pro-C", "au_thirdparty", "FabFilter"),
+            ("Pro-R", "au_thirdparty", "FabFilter"),
+            ("Pro-MB", "au_thirdparty", "FabFilter"),
+            ("Valhalla", "au_thirdparty", "Valhalla DSP"),
+            ("ValhallaRoom", "au_thirdparty", "Valhalla DSP"),
+            ("VintageVerb", "au_thirdparty", "Valhalla DSP"),
+            ("Waves", "au_thirdparty", "Waves"),
+            ("iZotope", "au_thirdparty", "iZotope"),
+            ("Ozone", "au_thirdparty", "iZotope"),
+            ("Neutron", "au_thirdparty", "iZotope"),
+            ("Nectar", "au_thirdparty", "iZotope"),
+            ("Slate", "au_thirdparty", "Slate Digital"),
+            ("Massive", "au_thirdparty", "Native Instruments"),
+            ("Diva", "au_thirdparty", "u-he"),
+            ("Sylenth", "au_thirdparty", "LennarDigital"),
+            ("Omnisphere", "au_thirdparty", "Spectrasonics"),
+            ("Vital", "au_thirdparty", "Matt Tytel"),
+            ("Pigments", "au_thirdparty", "Arturia"),
+            ("Saturn", "au_thirdparty", "FabFilter"),
+            ("Soundtoys", "au_thirdparty", "Soundtoys"),
+            ("Eventide", "au_thirdparty", "Eventide"),
+            ("UAD", "au_thirdparty", "Universal Audio"),
+            ("Arturia", "au_thirdparty", "Arturia"),
+            ("Superior Drummer", "au_thirdparty", "Toontrack"),
+            ("EZdrummer", "au_thirdparty", "Toontrack"),
+            ("Spitfire", "au_thirdparty", "Spitfire Audio"),
+            ("RC-20", "au_thirdparty", "XLN Audio"),
+            ("Decapitator", "au_thirdparty", "Soundtoys"),
+            ("EchoBoy", "au_thirdparty", "Soundtoys"),
         ]
+
+        // AU component type codes (4-char identifiers found in binary)
+        let auTypeCodes: Set<String> = ["aufx", "aumu", "aumf", "auol", "aumi"]
 
         for chunk in chunks {
             guard chunk.bodyLength > 4, chunk.bodyLength < 10_000_000 else { continue }
 
             let body = Data(data[chunk.bodyOffset..<(chunk.bodyOffset + chunk.bodyLength)])
 
-            // Scan for known plugin name keywords in ALL chunks
+            // Build ASCII representation for keyword search
             let ascii = body.map { b -> Character in
                 let s = Unicode.Scalar(b)
                 return s.value >= 32 && s.value < 127 ? Character(s) : Character("\0")
             }
             let bodyStr = String(ascii)
 
-            for plugin in knownPlugins where bodyStr.contains(plugin) {
-                plugins.insert(plugin)
+            // Strategy 1: Known plugin keyword matching
+            for entry in knownPluginCatalog where bodyStr.contains(entry.keyword) {
+                if pluginMap[entry.keyword] == nil {
+                    pluginMap[entry.keyword] = ParsedPlugin(
+                        name: entry.keyword,
+                        type: entry.type,
+                        manufacturer: entry.manufacturer,
+                        auComponentCode: nil
+                    )
+                }
             }
 
-            // For PluginData (null-ID) chunks: also extract all printable ASCII runs > 4 chars
-            // These may contain plugin names not in our known list.
-            if chunk.id == "PluginData" {
+            // Strategy 2: AU component code scanning
+            // Look for 4-char AU type codes followed by 4-char subtype and manufacturer
+            for i in stride(from: 0, to: body.count - 11, by: 1) {
+                // Read 4 bytes as potential AU type code
+                guard i + 12 <= body.count else { break }
+                let typeBytes = Data(body[i..<(i + 4)])
+                guard let typeStr = String(data: typeBytes, encoding: .ascii),
+                      auTypeCodes.contains(typeStr) else { continue }
+
+                // Read next 8 bytes as subtype (4) + manufacturer (4)
+                let subtypeBytes = Data(body[(i + 4)..<(i + 8)])
+                let mfrBytes = Data(body[(i + 8)..<(i + 12)])
+                guard let subtype = String(data: subtypeBytes, encoding: .ascii),
+                      let mfr = String(data: mfrBytes, encoding: .ascii) else { continue }
+
+                // Validate: all 3 codes should be printable 4-char strings
+                let allPrintable = (subtype + mfr).allSatisfy { $0.isASCII && $0 != "\0" }
+                guard allPrintable else { continue }
+
+                let componentCode = "\(typeStr):\(subtype):\(mfr)"
+                let name = "AU(\(subtype.trimmingCharacters(in: .whitespaces)))"
+                if pluginMap[componentCode] == nil {
+                    pluginMap[componentCode] = ParsedPlugin(
+                        name: name,
+                        type: "au_component",
+                        manufacturer: mfr.trimmingCharacters(in: .whitespaces),
+                        auComponentCode: componentCode
+                    )
+                }
+            }
+
+            // Strategy 3: PluginData and AuCO string extraction
+            if chunk.id == "PluginData" || chunk.id == idAuCO {
                 var run = ""
                 for byte in body {
                     let scalar = Unicode.Scalar(byte)
                     if scalar.value >= 32 && scalar.value < 127 {
                         run.append(Character(scalar))
                     } else {
-                        // End of printable run — keep if > 4 chars and looks like a plugin name
-                        // (starts with uppercase, not a path/URL/generic string)
-                        if run.count > 4
-                            && run.count < 64
-                            && run.first?.isUppercase == true
-                            && !run.hasPrefix("/")
-                            && !run.hasPrefix("http")
-                            && !run.contains("=")
-                            && !run.contains("\\")
-                        {
-                            plugins.insert(run)
+                        if let name = validatePluginStringRun(run) {
+                            if pluginMap[name] == nil {
+                                pluginMap[name] = ParsedPlugin(
+                                    name: name,
+                                    type: "unknown",
+                                    manufacturer: nil,
+                                    auComponentCode: nil
+                                )
+                            }
                         }
                         run = ""
                     }
                 }
                 // Flush final run
-                if run.count > 4
-                    && run.count < 64
-                    && run.first?.isUppercase == true
-                    && !run.hasPrefix("/")
-                    && !run.hasPrefix("http")
-                    && !run.contains("=")
-                    && !run.contains("\\")
-                {
-                    plugins.insert(run)
+                if let name = validatePluginStringRun(run) {
+                    if pluginMap[name] == nil {
+                        pluginMap[name] = ParsedPlugin(
+                            name: name,
+                            type: "unknown",
+                            manufacturer: nil,
+                            auComponentCode: nil
+                        )
+                    }
                 }
             }
         }
 
-        return Array(plugins).sorted()
+        return Array(pluginMap.values).sorted { $0.name < $1.name }
+    }
+
+    /// Validate a printable ASCII run as a potential plugin name.
+    /// Accepts both uppercase and lowercase starting chars (for "iZotope" etc).
+    private static func validatePluginStringRun(_ run: String) -> String? {
+        guard run.count > 4 && run.count < 64 else { return nil }
+        guard let first = run.first, first.isLetter else { return nil }
+        // Must contain at least one uppercase letter (excludes random lowercase noise)
+        guard run.contains(where: { $0.isUppercase }) else { return nil }
+        // Filter paths, URLs, generic strings
+        guard !run.hasPrefix("/"),
+              !run.hasPrefix("http"),
+              !run.contains("="),
+              !run.contains("\\"),
+              !run.hasPrefix("com."),
+              !run.contains("::"),
+              !run.hasPrefix("NS"),
+              !run.hasPrefix("CF")
+        else { return nil }
+        return run
     }
 
     /// Returns true if the chunk ID consists only of non-printable / null bytes.
