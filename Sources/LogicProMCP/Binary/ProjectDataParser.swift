@@ -106,8 +106,13 @@ enum ProjectDataParser {
         // Extract audio file references
         let audioFiles = extractAudioFiles(chunks: chunks, data: data)
 
+        // Compute global timeline tick offset from marker events.
+        // If the first marker's tick is large (absolute timeline space),
+        // we subtract the offset so region bars align correctly.
+        let timelineTickOffset = computeTimelineTickOffset(markerEvents: evSqMarkerEvents)
+
         // Extract audio regions
-        var regions = extractRegions(chunks: chunks, data: data)
+        var regions = extractRegions(chunks: chunks, data: data, timelineTickOffset: timelineTickOffset)
 
         // Apply track-to-region mapping (uses public tracks for OID set)
         applyTrackRegionMapping(
@@ -799,7 +804,35 @@ enum ProjectDataParser {
     ///   0x4C  *B  name (ASCII)
     ///
     /// The AuRg OID matches the AuFl OID that owns this audio asset.
-    private static func extractRegions(chunks: [ChunkInfo], data: Data) -> [ParsedRegion] {
+    /// Compute the global timeline tick offset.
+    ///
+    /// Logic Pro's timeline may start well before bar 1, using a large pre-roll offset.
+    /// Marker events from type-18 sequences and tempo bridge events are in this absolute
+    /// space. We detect the offset by checking if the earliest marker tick implies a bar
+    /// much larger than expected. If the first marker is at a very high tick but should
+    /// be within the first ~50 bars, the difference is the pre-roll offset.
+    ///
+    /// Fallback: if markers aren't helpful, return 0 (no offset).
+    private static func computeTimelineTickOffset(markerEvents: [MarkerEvent]) -> Int {
+        guard !markerEvents.isEmpty else { return 0 }
+
+        // Find the minimum startTick across all markers
+        let minTick = markerEvents.map { Int($0.startTick) }.min() ?? 0
+        guard minTick > 0 else { return 0 }
+
+        // The first marker should typically be within the first ~200 bars.
+        // If minTick implies a bar > 200, there's likely a pre-roll offset.
+        let impliedBar = minTick / ticksPerBar + 1
+        if impliedBar > 200 {
+            // Round offset down to nearest bar boundary for clean alignment
+            let offsetBars = (minTick / ticksPerBar) - 1  // leave 1 bar before first marker
+            return max(0, offsetBars * ticksPerBar)
+        }
+
+        return 0
+    }
+
+    private static func extractRegions(chunks: [ChunkInfo], data: Data, timelineTickOffset: Int = 0) -> [ParsedRegion] {
         var result: [ParsedRegion] = []
 
         for chunk in chunks where chunk.id == idAuRg {
@@ -812,19 +845,18 @@ enum ProjectDataParser {
             var startTick: Int = 0
             var lengthTicks: Int = 0
 
-            // Bug 3 Fix: Try legacy tick mode FIRST.
-            // 8-byte LE tick at body offset 0x30; bar = tick / 3840 + 1.
-            // Accept if bar is in reasonable range (1-5000).
-            // Only fall back to bar-field mode if legacy gives 0 or unreasonable values.
+            // Bug 3 Fix: Try legacy tick mode FIRST, applying the global timeline
+            // tick offset to convert from absolute timeline space to relative (bar 1 = tick 0).
             var usedLegacy = false
             if body.count >= 0x38 {
-                // Read full 8-byte LE tick at 0x30
                 let rawStartTick = Int(readLE64(body, at: 0x30))
-                let legacyBar = rawStartTick / ticksPerBar + 1
-                if rawStartTick > 0 && legacyBar >= 1 && legacyBar <= 5000 {
-                    startTick = rawStartTick
-                    startBar = Double(rawStartTick) / Double(ticksPerBar) + 1.0
-                    // Length at 0x38 (8-byte LE tick)
+                // Apply timeline offset: subtract pre-roll to get relative ticks
+                let adjustedTick = rawStartTick - timelineTickOffset
+                let legacyBar = adjustedTick / ticksPerBar + 1
+                if adjustedTick > 0 && legacyBar >= 1 && legacyBar <= 5000 {
+                    startTick = adjustedTick
+                    startBar = Double(adjustedTick) / Double(ticksPerBar) + 1.0
+                    // Length at 0x38 (duration ticks — no offset needed)
                     if body.count >= 0x40 {
                         let rawLenTick = Int(readLE64(body, at: 0x38))
                         lengthTicks = rawLenTick
@@ -835,16 +867,9 @@ enum ProjectDataParser {
                         lengthBars = Double(lengthTicks) / Double(ticksPerBar)
                     }
                     usedLegacy = true
-                } else if rawStartTick > 0 {
-                    // Tick is non-zero but bar is out of range — check for large pre-roll offset.
-                    // Some projects encode absolute timeline ticks; subtract any offset > 5000 bars.
-                    // If after subtracting some pre-roll the bar lands in 1-5000, accept it.
-                    let barsFromZero = rawStartTick / ticksPerBar
-                    if barsFromZero > 5000 {
-                        // Try bar-field below — don't use this tick value
-                    } else if legacyBar > 5000 {
-                        // legacyBar > 5000: bar-field will be tried below
-                    }
+                } else if rawStartTick > 0 && adjustedTick <= 0 {
+                    // After offset subtraction the tick went negative — region is
+                    // before bar 1 (pre-roll area). Skip to bar-field fallback.
                 }
             }
 
