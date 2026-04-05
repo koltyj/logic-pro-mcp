@@ -141,8 +141,14 @@ enum ProjectDataParser {
         // Extract Envi environment labels (stack grouping labels)
         let environmentLabels = extractEnviNames(chunks: chunks, data: data)
 
+        // Extract Envi OID → name map for AuCO enrichment
+        let enviNameMap = extractEnviNameMap(chunks: chunks, data: data)
+
         // Extract all AuCO channel strips as sub-track enumeration
         var channelStrips = extractAllChannelStrips(chunks: chunks, data: data)
+
+        // Enrich generic AuCO names with Envi environment labels
+        enrichChannelStripNamesFromEnvi(strips: &channelStrips, enviNameMap: enviNameMap)
 
         // Wire AuCO → Trak → MSeq chain and infer function groups on strips
         linkChannelStripsToTrak(strips: &channelStrips, trakEntries: trakEntries)
@@ -1359,6 +1365,68 @@ enum ProjectDataParser {
         }
 
         return names
+    }
+
+    /// Extract Envi OID → name map for correlating environment objects with AuCO channel strips.
+    /// Unlike `extractEnviNames` which returns a flat list, this preserves the chunk OID.
+    private static func extractEnviNameMap(chunks: [ChunkInfo], data: Data) -> [UInt32: String] {
+        var map: [UInt32: String] = [:]
+
+        for chunk in chunks where chunk.id == idEnvi {
+            guard chunk.bodyLength >= 4 else { continue }
+            let body = Data(data[chunk.bodyOffset..<(chunk.bodyOffset + chunk.bodyLength)])
+
+            if let name = extractEnviName(body: body), !name.isEmpty {
+                // Keep first name per OID (Envi OIDs can repeat with different bodies)
+                if map[chunk.oid] == nil {
+                    map[chunk.oid] = name
+                }
+            }
+        }
+
+        return map
+    }
+
+    /// Enrich generic AuCO channel strip names ("Audio N") with Envi environment labels.
+    ///
+    /// Matching strategy: for each generic strip, find an Envi object whose OID is
+    /// within ±4 of the strip's OID and hasn't been consumed by another strip yet.
+    /// This exploits the fact that Logic assigns OIDs to Envi and AuCO objects in
+    /// nearby ranges for the same logical channel.
+    private static func enrichChannelStripNamesFromEnvi(
+        strips: inout [ChannelStrip],
+        enviNameMap: [UInt32: String]
+    ) {
+        guard !enviNameMap.isEmpty else { return }
+
+        // Sort Envi OIDs for efficient proximity search
+        let sortedEnviOids = enviNameMap.keys.sorted()
+        var consumedEnviOids = Set<UInt32>()
+
+        for i in strips.indices {
+            guard strips[i].isGeneric else { continue }
+
+            let stripOid = UInt32(strips[i].oid)
+
+            // Find nearest unconsumed Envi OID within ±4
+            var bestOid: UInt32? = nil
+            var bestDist: UInt32 = 5
+
+            for enviOid in sortedEnviOids {
+                guard !consumedEnviOids.contains(enviOid) else { continue }
+                let dist = stripOid > enviOid ? stripOid - enviOid : enviOid - stripOid
+                if dist < bestDist {
+                    bestDist = dist
+                    bestOid = enviOid
+                }
+            }
+
+            if let oid = bestOid, let enviName = enviNameMap[oid] {
+                strips[i].name = enviName
+                strips[i].isGeneric = false
+                consumedEnviOids.insert(oid)
+            }
+        }
     }
 
     /// Scan an Envi body for the first plausible printable ASCII name.
