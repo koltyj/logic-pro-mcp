@@ -388,3 +388,52 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## 11. Trns Transport Globals (Partial)
+
+The `Trns` chunk stores global transport / timeline configuration that is
+independent of the arrangement's section events (which live in `EvSq` /
+`TxSq`). Every ProjectData binary observed so far contains exactly one `Trns`
+chunk with `oid == 0` and a body length of 492 bytes. The full schema is only
+partially understood; the fields below are confirmed across all three
+reference projects.
+
+### Known Fields
+
+| Offset | Size | Name          | Notes                                                                                                |
+|:-------|:-----|:--------------|:-----------------------------------------------------------------------------------------------------|
+| 0x00   | u32  | `header1`     | Small length-ish constant. Observed `0x410` (1040) in projects 1 & 3 and `0x420` (1056) in project 2. The same value is echoed at offset 0x78, suggesting it bounds a sub-block inside the body. |
+| 0x50   | u32  | `gridValue`   | Observed to equal `3840` in all three projects — Logic's canonical ticks-per-bar value for 4/4 at the project resolution. Strong indication that `Trns` caches the timeline grid. |
+| 0x78   | u32  | `header1`-echo | Repeats the value from offset 0x00. Typically zero-or-echo elsewhere in the body. |
+
+### Derived Observations
+
+- A literal `3840` (`0x00000F00`) appears in the body in all three reference
+  projects (at least at offset 0x50).
+- The literal `4096` (`0x00001000`) does **not** appear in any of the three
+  reference projects as an aligned `u32`, despite earlier notes suggesting it
+  might. It is still tracked by the decoder as a boolean flag because other
+  projects may surface it.
+- The body contains one or more `u32` words whose low 16 bits have the high
+  bit set (i.e. would be negative if interpreted as `Int16`), consistent with
+  the "pre-roll-like signed values" noted in `RE_FINDINGS.md`. Examples seen
+  at body offsets 0x20, 0xCC and 0xD0 in the reference projects.
+
+### Decoder
+
+See `Sources/LogicProMCP/Binary/Decoders/TrnsDecoder.swift`. It runs a
+self-contained chunk scan, locates every `Trns` chunk, and returns a
+`TrnsGlobals` record per chunk with:
+
+- `oid`, `bodyLength`
+- `header1` (`u32 @ 0x00`), `gridValue` (`u32 @ 0x50`)
+- `containsTicksPerBar` / `containsDivisionGrid` — whether the literals `3840`
+  and `4096` appear anywhere in the body as aligned little-endian `u32`s
+- `preRollU32s` — deduplicated full `u32` values whose low 16 bits would be
+  negative as `Int16` (skipping the trivially-generic `0xFFFF`)
+
+The decoder is intentionally conservative: it does not claim to fully parse
+the chunk, and it is invoked separately from `ProjectDataParser` so no
+existing consumers are affected.
