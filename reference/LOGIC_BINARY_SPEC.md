@@ -388,3 +388,133 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## Song Node Graph (Topological Join)
+
+See `reference/RE_FINDINGS.md`, section "Song Node Graph / Marker-Bar Join (Decoded)", for the underlying reverse-engineering analysis. That section establishes that `Song` chunk bodies carry 24-byte node records (`u32x6`) with a shared ID space joining a "marker domain" (type 14) to a "bar domain" (type 20), while the numeric payload fields (`rec[2]`, `rec[3]`) remain opaque (hash-like, non-monotonic, not file-offset, not plugin-index).
+
+### Swift API — `SongGraphDecoder`
+
+Source: `Sources/LogicProMCP/Binary/Decoders/SongGraphDecoder.swift`.
+
+```swift
+public struct SongNode: Sendable, Codable, Equatable, Hashable {
+    let type: UInt32          // rec[0]: 14 = marker domain, 20 = bar domain
+    let joinKey: UInt32       // rec[1]: shared ID space (join key)
+    let payload2: UInt32      // rec[2]: opaque (do NOT decode)
+    let payload3: UInt32      // rec[3]: opaque (do NOT decode)
+    let linkType: UInt32      // rec[4]: typed link target type (0, 14, 20)
+    let linkTargetId: UInt32  // rec[5]: typed link target ID
+}
+
+public struct MarkerBarAnchor: Sendable, Codable, Equatable, Hashable {
+    let joinKey: UInt32       // rec[1] present in BOTH type-14 and type-20
+    let markerOid: UInt32?    // joinKey if in {4,8,12,16,20,24,28,32,36}, else nil
+    let barSequence: Int      // index into sorted type-20 chain
+}
+
+public enum SongGraphDecoder {
+    static func decode(data: Data) -> (nodes: [SongNode], anchors: [MarkerBarAnchor])
+}
+```
+
+### Decoding Contract
+
+- The decoder scans the ProjectData blob for chunks whose reversed ID is `Song` (typically one chunk with `oid=0`, body length on the order of a few KB).
+- For each `Song` chunk, the body is probed at every 4-byte alignment in `0..<24`. The alignment with the most valid records wins (`RE_FINDINGS.md` notes alignments near 20 and 9500 as common). A record is valid when:
+  - `rec[0]` ∈ `{14, 20}`
+  - `rec[1] > 0` and `rec[1] < 10000`
+  - `rec[4]` ∈ `{0, 14, 20}`
+- Valid records from every Song chunk are aggregated into a single `[SongNode]` list.
+- Anchors are produced for each `rec[1]` value that appears in BOTH the type-14 set and the type-20 set (structural intersection). `markerOid` is set only when the `joinKey` matches the observed arrangement marker OID set `{4, 8, 12, 16, 20, 24, 28, 32, 36}`. `barSequence` is the zero-based index of the matching type-20 node inside the join-key-sorted list of type-20 nodes — it is a relative ordering hint, not an absolute bar number.
+
+### Intentional Scope Limits
+
+- This decoder is topological-only. Payload fields are exposed verbatim but are NOT decoded numerically (see `RE_FINDINGS.md` for the analysis that ruled out tick/bar/offset interpretations).
+- For absolute timing, use the `EvSq` tempo bridge / explicit bar anchor tables described in the "Bar-Number Mapping" section above. `SongGraphDecoder` is intended for complementary `A -> B` section ordering only.
+
+---
+
+## ScSt / InSt Score Sets
+
+Score sets are Logic Pro's logical groupings of instruments for the Score
+Editor (print layout, on-screen staff stacks, transposition groups). Every
+project stores exactly one `InSt` root chunk (the "Score Set" label) plus
+exactly one `ScSt` chunk that enumerates the instrument slots.
+
+### InSt (Score Set root)
+
+- One per project, `oid=0`, body length **64 bytes**.
+- Body layout:
+
+```
+Offset  Size  Meaning                            Observed value
+0x00    u16   body-length indicator              0x0234 (564)
+0x02    6B    flags / zero padding
+0x08    u16   length of primary string           0x10 (16)
+0x0A    4B    zero padding
+0x0E    ASCII null-terminated primary label      "Score Set\0" (then zero padding)
+0x28    8B    zero padding
+0x30    u32   secondary field count              0x64 (100)
+0x34    u16   length of secondary string         0x09 (9)
+0x36    ASCII null-terminated secondary label    "Score Set\0"
+```
+
+- The decoder reads the null-terminated ASCII at `0x0E` as the authoritative
+  label and falls back to `0x36` if `0x0E` is empty.
+
+### ScSt (Score Set body)
+
+- One per project, `oid=12`, body length **3752 bytes**.
+- Header (first 64 bytes) is numeric/config fields; no strings are stored in
+  that region. The first ASCII run (`"Guitar"`) appears at body offset
+  `0x6C`. Subsequent instrument labels follow at roughly 64-byte strides
+  and then at 8-byte strides once the drum kit block begins (`"Kick"` at
+  `0xA3A`).
+- Body contains a mix of title-case instrument labels (e.g. `"Guitar"`,
+  `"Guitar D"`, `"Bass 4"`, `"Kick"`, `"Snare"`, `"HiHat"`) and Logic's
+  empty-slot placeholder `"* New Group"` (repeated many times).
+
+### Swift API — `ScoreSetDecoder`
+
+Source: `Sources/LogicProMCP/Binary/Decoders/ScoreSetDecoder.swift`.
+
+```swift
+struct ScoreSet: Sendable, Codable {
+    let oid: UInt32              // chunk OID (== 12 for default score set)
+    let rootName: String         // first title-case run (e.g. "Guitar")
+    let instrumentNames: [String] // all unique plausible runs, deduped in order
+}
+
+struct InstRecord: Sendable, Codable {
+    let oid: UInt32              // chunk OID (== 0 for the score-set root)
+    let label: String            // "Score Set" (read from body offset 0x0E)
+}
+
+enum ScoreSetDecoder {
+    static func decode(data: Data) -> (sets: [ScoreSet], roots: [InstRecord])
+}
+```
+
+### Decoding Contract
+
+- `InSt`: read a null-terminated ASCII string at body offset `0x0E`
+  (cap 40 bytes). Returns one `InstRecord` per `InSt` chunk.
+- `ScSt`: scan the body for contiguous printable-ASCII runs of length
+  4..32 that contain at least one letter and do not start with `*`
+  (Logic's "* New Group" placeholder). Dedupe runs while preserving
+  on-disk order. `rootName` is the first run whose prefix matches
+  `Score | Guitar | Bass | Piano | Drums` or that begins with an uppercase
+  ASCII letter. `instrumentNames` is the full deduped run list (the
+  `rootName` is retained in it, since the first row of a Logic Score Set
+  doubles as both the group title and its first instrument slot).
+
+### Observed Values (all three fixtures)
+
+- `roots.count == 1`, `roots[0].label == "Score Set"`, `roots[0].oid == 0`.
+- `sets.count == 1`, `sets[0].oid == 12`, `sets[0].rootName == "Guitar"`.
+- `sets[0].instrumentNames` starts with `["Guitar", "Guitar D", "Guitar G",
+  "Guitar lo G", "Guitar D7", "Guitar CG", "Guitar CD", "Bass 4",
+  "Bass 5/C", "Bass 5/B", "Bass 6/C", "Bass 6/B", "Kick", "Snare", ...]`.
