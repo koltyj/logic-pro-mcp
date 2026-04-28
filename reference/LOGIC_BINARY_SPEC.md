@@ -388,3 +388,42 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## 14. TxSt — Score Notation Styles
+
+TxSt chunks define the font styles used by Logic's score editor for text
+elements (page numbers, bar numbers, chord symbols, etc.). Every project
+contains exactly 32 of these, stepped by OID at 4 (OID = 0, 4, 8, ..., 124).
+
+### Body Layout
+
+| Offset | Size | Field | Description |
+|:-------|:-----|:------|:------------|
+| 0x00   | 2B   | u16 length | Body length indicator. |
+| 0x08   | 2B   | font1 size | Font size × 2 (e.g. `0x1E` = 30 = 15pt). |
+| 0x0A   | 2B   | font2 size | Secondary font size. |
+| 0x0E   | 2B   | flags | Style flags. |
+| 0x34   | 40B  | font1 name | Null-terminated ASCII (e.g. `Chicago`). |
+| var    | var  | style label | `u16 length` + ASCII (e.g. `Plain Text`). |
+| var    | var  | sample text | `u16 length` + ASCII (always `abcABC123456`). |
+| var    | var  | font2 name | `u16 length` + ASCII (e.g. `Times`, `Times-Italic`). |
+| var    | 4B   | terminator | `0xFFFFFFFF`. |
+
+After the first font's null terminator, the body contains padding zeros
+followed by three length-prefixed ASCII strings.
+
+### Known OID → Style Label Map (32 entries)
+
+```
+ 0: Plain Text           4: Page Numbers         8: Bar Numbers
+12: Instrument Names    16: Tuplets             20: Repeat Endings
+24: Chord Root          28: Chord Ext.          32: Mult. Rests
+36: Tablature           40: Tempo Symbols       44: Octave Symbols
+48: Note Heads          52: Guitar Grid Fingerings
+56: Guitar Markings     60: Fingerings
+64..124: reserved16..reserved31
+```
+
+Decoder: `TxStDecoder.decode(data:) -> [TxStRecord]`.
