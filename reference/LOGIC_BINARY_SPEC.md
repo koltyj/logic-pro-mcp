@@ -388,3 +388,46 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## AuCO Channel-Strip Type Code (body[0x04])
+
+Every `AuCO` chunk carries a single-byte "kind" code at body offset `0x04`
+that classifies the channel strip. This byte is decoded independently of the
+main parser by `Sources/LogicProMCP/Binary/Decoders/AuCOTypeDecoder.swift`
+(exposed as the `AuCOType` enum and `AuCOTypeDecoder.decode(data:)` entry
+point).
+
+### Observed type codes
+
+| Hex | `AuCOType`      | Meaning              | Example strip names (from `logic-project-1.logicx`) |
+| :-- | :-------------- | :------------------- | :------------------------------------------------- |
+| 0x40 | `.audio`        | Audio                | `Audio 7`, `Audio 8`                                |
+| 0x41 | `.monoInput`    | Mono Input           | `Input 1`, `Input 4`                                |
+| 0x42 | `.aux`          | Aux                  | `Aux 1`, `Aux 2`                                    |
+| 0x43 | `.softInst`     | Software Instrument  | `Inst 1`, `Inst 2`                                  |
+| 0x44 | `.monoOutput`   | Mono Output          | `Output 3`, `Output 4`, `¥Output 1` (main phys out) |
+| 0x45 | `.bus`          | Bus                  | `Bus 1`, `Bus 2`                                    |
+| 0x46 | `.master`       | Master               | main mixer master strip                             |
+| 0x49 | `.stereoInput`  | Stereo Input         | `Input 1-2`, `Input 3-4`                            |
+| 0x4C | `.stereoOutput` | Stereo Output        | `Output 3-4`, `Output 9-10`, `Output 1-2`           |
+
+All nine codes are observed in `logic-project-1.logicx/Alternatives/000/ProjectData`.
+Values outside this set are treated as unknown and silently dropped by the
+decoder — preserving forward compatibility when newer Logic versions add
+additional kinds.
+
+### Decoder contract
+
+- Input: raw ProjectData bytes (must start with magic `23 47 C0 AB`).
+- Output: `[AuCOTypeRecord]` in file-discovery order.
+- Each record exposes `oid` (LE u32 from the chunk header), `bodyLength`,
+  `type` (`AuCOType`), and `name` (null-terminated ASCII at `body[0x3C]`, max
+  64 bytes, whitespace-trimmed).
+- AuCO bodies shorter than `0x5A` bytes are skipped (insufficient data to
+  safely read the name field).
+
+The decoder intentionally re-implements a minimal copy of the anchor-based
+chunk scanner from `ProjectDataParser` so it can be exercised in isolation by
+its unit tests without pulling in the full parser surface area.
