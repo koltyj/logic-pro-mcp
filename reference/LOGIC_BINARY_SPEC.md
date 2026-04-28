@@ -388,3 +388,57 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## 16. SngO — Song Object
+
+Every project contains exactly 3 `SngO` chunks with stable OIDs. They hold
+per-song metadata in three distinct forms.
+
+### SngO(oid=224) — Drummer Model State
+
+Body length ~1196 bytes. Header (first 0x2A0 bytes) followed by an
+NSKeyedArchiver `bplist00` payload at body offset 672.
+
+Archived graph:
+```json
+{
+  "genInstDrummerBaseModel.state": {
+    "drummerModelTrackStates": {},
+    "autoSelectRegions": false,
+    "stateVersion": 1
+  },
+  "stateVersion": 5
+}
+```
+
+Header fields of note:
+- `u32@0x00` — declared body length.
+- `u32@0x10 = 0x2710` (10000) — stable marker.
+- `u32@0x14 = 0xED99_0005` — stable discriminator variant.
+
+### SngO(oid=244) — Unknown Flags Block
+
+Body length 1648 bytes (stable across samples). Mostly zero with:
+- `u32@0x00 = 0x670` (declared length).
+- `u32@0x10 = 0x01_6006` — nonzero flag/marker.
+
+Purpose undecoded. Appears to be a per-song global state block.
+
+### SngO(oid=264) — Tiny or Arrangement-Marker Plist
+
+Body length varies by project:
+- **32 bytes** when the project has no arrangement markers (e.g. sample 1).
+- **Variable (~700-1400 bytes)** when the project has arrangement markers,
+  carrying an NSKeyedArchiver `bplist00` at body offset 76 with the same
+  `Shared.arrangementMarkerTitleList` structure as `GenM`.
+
+Header fields:
+- `u32@0x14 = 0xED99_0001` — stable identity hash across all samples.
+- `u32@0x10 = 0x28A0` (10400) — stable marker.
+
+When the plist is present, it enumerates arrangement-marker slot
+definitions (type + optional name) identically to `GenM`.
+
+Decoder: `SngODecoder.decode(data:) -> [SngORecord]`.
