@@ -388,3 +388,45 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## 15. TxSq — Arrangement Marker Text
+
+Projects with explicit arrangement markers (e.g. samples 2 and 3) carry
+8 `TxSq` chunks each. Sample 1 has none.
+
+Two payload shapes coexist:
+
+### Short-ASCII Section Name (~104-106 bytes)
+
+Body layout (observed for project-2 `TxSq(oid=36)`):
+
+```
+0000: 68 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0010: 62 00 00 00 68 00 00 00 14 00 ff 01 1b 1b 2f 2f   ..........//QR
+0020: 51 52 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+...
+0060: 00 00 49 6e 74 72 6f 00                           ..Intro.
+```
+
+- `u32@0x00` — body length indicator.
+- `u32@0x10` = `0x62` — fixed marker.
+- `u32@0x14` = body length (repeat).
+- Bytes `2F 2F 51 52` at 0x1E are the literal ASCII `"//QR"` tag — the
+  short-TxSq discriminator.
+- A null-terminated ASCII section name appears near the tail (observed
+  around body offset `0x62`). The decoder locates the first printable
+  ASCII run after the `"//QR"` tag.
+
+Observed names in the bundled fixtures:
+`Intro`, `Verse`, `Chorus`, `Bridge`.
+
+### RTF Section Name (~480-484 bytes)
+
+Larger TxSq chunks carry RTF payloads (`{\rtf1 ... \fs24 <text> }`) —
+these are the same encoding used by track names. The existing parser
+extracts these; the TxSq marker decoder emits them as `source = .rtf`
+when the short-ASCII slot is empty.
+
+Decoder: `TxSqMarkerDecoder.decode(data:) -> [TxSqMarker]`.
