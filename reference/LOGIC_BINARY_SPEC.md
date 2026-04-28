@@ -388,3 +388,87 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## GenM Arrangement Marker Title List
+
+The `GenM` chunk wraps a serialized `NSKeyedArchiver` bplist that holds Logic Pro's *arrangement-marker title list* — the pool of named slots (Intro, Verse, Chorus, Bridge, etc.) that the arrangement track draws from. At most one GenM chunk appears per project, and it is absent entirely on projects that never opened an arrangement track.
+
+### Chunk Body Layout
+
+```
+0x00  36B   GenM-specific header:
+            0x00  u32  flags/type  (observed 0x00000510)
+            0x04  u32  zero
+            0x08  u32  count-like  (observed 0x00000005)
+            0x0C  u32  zero
+            0x10  i64  sentinel    (0xFFFFFFFFFFFFFFFF)
+            0x18  u32  zero
+            0x1C  u32  inner length (body_length - 0x24)
+            0x20  u32  zero
+0x24  N     `bplist00` NSKeyedArchiver payload (to end of body)
+```
+
+Presence in the shipped fixtures:
+
+| Project           | GenM count |
+| :---------------- | :--------- |
+| `logic-project-1` | 0          |
+| `logic-project-2` | 1 (12 slots, 7 named) |
+| `logic-project-3` | 0          |
+
+### Bplist Graph
+
+The NSKeyedArchiver root (via `$top.root`) resolves to a dictionary of the form:
+
+```
+{
+  "Shared": {
+    "arrangementMarkerTitleList": {
+      "0":  { "type": 0 },
+      "1":  { "type": 1 },
+      ...
+      "5":  { "type": 1, "name": { "NS.string": "Intro"   } },
+      "6":  { "type": 1, "name": { "NS.string": "Verse"   } },
+      "7":  { "type": 1, "name": { "NS.string": "Chorus"  } },
+      "11": { "type": 1, "name": { "NS.string": "Bridge 2"} }
+    }
+  }
+}
+```
+
+Key observations:
+
+- Keys are stringified integer slot indices (`"0"`..`"11"` in project 2).
+- Values are NSDictionaries with:
+  - `type` (Int, observed 0..5) — exact semantics unknown; typeless placeholders use `type == 0` with no `name`.
+  - `name` (optional) — an `NSMutableString` wrapper exposing `NS.string`.
+- All strings, dictionaries, and numbers are deduplicated via `UID` refs into the top-level `$objects` array, as is standard for NSKeyedArchiver.
+
+### Parsing Approach
+
+Full `NSKeyedUnarchiver` would require registering the Objective-C classes named in `$classname` (`NSMutableString`, `NSMutableDictionary`, ...). Instead, `GenMDecoder` parses the bplist into a raw Swift tree via `PropertyListSerialization` and walks the graph manually:
+
+1. Locate each `GenM` chunk with the standard anchor-based scanner and find the `bplist00` magic inside its body (defensively — expected offset is `0x24`).
+2. Call `PropertyListSerialization.propertyList(from:options:format:)` to get the raw `[String: Any]` with `$objects`, `$top`, and `$classes` keys.
+3. Find the sentinel string `"arrangementMarkerTitleList"` in `$objects`.
+4. Find the container NSDictionary whose `NS.keys` references that sentinel by `UID`; read the sibling `NS.objects` UID to locate the title-list NSDictionary.
+5. Walk the title list: each `NS.keys[i]` UID resolves to a slot-index string (`"0"`..`"N"`) and each `NS.objects[i]` UID resolves to an entry NSDictionary with `type`/`name`.
+
+Swift's `PropertyListSerialization` returns UID references as `CFKeyedArchiverUID` opaque objects. The CoreFoundation SPI (`CFKeyedArchiverUIDGetValue`) is not bridged into Swift, so the decoder extracts the integer by parsing the `String(describing:)` representation — the format is stable: `<CFKeyedArchiverUID 0x... [0x...]>{value = N}`.
+
+### Decoder Output
+
+`GenMDecoder.decode(data:)` / `decode(path:)` returns `[ArrangementMarkerTitle]` sorted by `slotIndex`, where each entry is:
+
+```swift
+struct ArrangementMarkerTitle: Sendable, Codable, Equatable {
+    let slotIndex: Int       // e.g. 5
+    let type: Int            // e.g. 1
+    let name: String?        // e.g. "Intro", or nil for typeless placeholders
+}
+```
+
+Projects without a GenM chunk produce an empty array. Slots with `type == 0` and no `name` are preserved (with `name == nil`) so the caller sees the full slot table as Logic stored it.
+
