@@ -388,3 +388,54 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+### AU Plugin Component Codes
+
+Audio Unit plugins referenced by a project are identified by three contiguous
+4-character ASCII codes embedded in the binary (12 bytes total):
+
+```
+offset 0   4   8   12
+       +---+---+---+
+       | T | S | M |
+       +---+---+---+
+        type  subtype  manufacturer
+```
+
+- `typeCode` — the AU component type. Known values seen in real projects:
+  - `aufx`, `aufc` — audio effect
+  - `aumu` — music / instrument
+  - `aumf` — music effect (MIDI-processing)
+  - `augn` — generator
+  - `auou` — output
+  - `aumx` — mixer
+  - `aupn`, `aupl` — panner
+  - `aufm` — music format
+- `subtypeCode` — plugin-specific 4-char identifier (e.g. `XfOX` for Xfer
+  Serum, `ChEQ` style codes for Apple built-ins). Must contain at least one
+  letter.
+- `manufacturerCode` — 4-char manufacturer identifier. Known codes:
+  - `appl` → Apple
+  - `Xfer` → Xfer Records
+  - `NatI` → Native Instruments
+  - `FabF` → FabFilter
+  - `ValD` → Valhalla DSP
+  - `iZot` → iZotope
+  - `Slte` → Slate Digital
+  - `WAVE` → Waves
+  - `sfbm` → Soundtoys
+
+These 12-byte triples appear inside multiple chunk families — notably
+`PluginData` (null-ID) chunks and `AuCO` channel-strip bodies. A robust
+recovery strategy is a brute-force scan over every byte offset of the
+`ProjectData` buffer looking for 12 consecutive printable-ASCII bytes
+(`0x20..0x7E`) whose first 4 are a known AU type code. False positives are
+further filtered by requiring the subtype and manufacturer to each contain
+at least one letter.
+
+The standalone scanner is implemented by
+`Binary/Decoders/PluginComponentDecoder.swift` as a pure `Data -> [PluginComponent]`
+function with no dependency on `ProjectDataParser`. It deduplicates results
+by the `(typeCode, subtypeCode, manufacturerCode)` triple and maps `typeCode`
+to a coarse `Category` enum (effect, instrument, musicEffect, generator,
+output, mixer, panner, other).
