@@ -388,3 +388,58 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## 14. AuCU Send Records (structured)
+
+Swift now extracts the 76-byte AuCU send sub-records defined in Section 5 (see
+the `len76_records` / `len76_field_counts` notes) into a typed Swift model.
+
+Decoder: `Sources/LogicProMCP/Binary/Decoders/AuCUSendDecoder.swift`
+
+Public shape:
+
+```swift
+public struct AuCUSendRecord: Sendable, Codable {
+    let containingChunkOid: UInt32
+    let indexInChunk: Int
+    let u16Offset18: UInt16
+    let u32Offset24: UInt32
+    let sendLevelDB: Double   // clamped to [-144.0, +24.0]
+    let sendEnabled: Bool?    // true if u16@0x18 == 0x0000,
+                              // false if 0x0100, nil otherwise
+}
+
+public enum AuCUSendDecoder {
+    public static func decode(data: Data) -> [AuCUSendRecord]
+}
+```
+
+Extraction rules (copied from Section 5 for convenience):
+
+- The decoder scans every `AuCU` chunk with `bodyLength >= 76` and walks its
+  body at offsets `0, 76, 152, …` up to `bodyLength - 76`.
+- At each sub-record offset it reads:
+  - `u16@+0x18` — send-enable flag (`0x0000` on, `0x0100` off).
+  - `u32@+0x24` — raw send level.
+- `sendLevelDB` is computed as `40 * log10(u32@+0x24 / 1_509_949_440.0)`
+  with `raw == 0` treated as negative infinity and the result clamped to the
+  `[-144.0, +24.0] dB` range.
+- The chunk scanner is a private copy of `ProjectDataParser.scanChunks`; the
+  decoder intentionally does not import the main parser so it can be used
+  in isolation by downstream tools and tests.
+- Records are emitted in discovery order (chunk order, then sub-record
+  index within each chunk). Integration into `ProjectDataInfo` is
+  deliberately deferred and is **not** performed by this decoder.
+
+Validation is covered by `Tests/LogicProMCPTests/Decoders/AuCUSendDecoderTests.swift`,
+which opens the three bundled `.logicx` fixtures and asserts:
+
+- `decode()` returns a non-empty array for each project.
+- Every record's `sendLevelDB` stays within `[-144.0, +24.0]`.
+- At least one record reports `sendEnabled == true` (canonical send-on
+  state per Section 5).
+- At least one record matches a canonical send level from Section 5's
+  `-inf / -6 / 0 / +6 dB` validation set (`u32Offset24 == 0x00000000` →
+  `-144 dB`, or `u32Offset24 == 0x5A000000` → `0 dB`).
