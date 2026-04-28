@@ -388,3 +388,43 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+## Clip / Vide Headers
+
+`Clip` and `Vide` are small, mostly-placeholder metadata chunks that appear with a fixed shape in every ProjectData file observed so far. The layouts are only partially understood; the fields below are stable across all three sample bundles (`logic-project-1/2/3.logicx`).
+
+Decoded by `ClipVideDecoder` (`Sources/LogicProMCP/Binary/Decoders/ClipVideDecoder.swift`).
+
+### `Clip` chunks
+
+- Count: exactly 3 per project, with OIDs `0`, `4`, `8`.
+- Body length: 85 bytes.
+- Partial layout:
+  - `u32@0x00` — header length indicator, always `0xA0` (160).
+  - `u32@0x10` — count/offset field. Observed values track the OID: `0x28` (oid=0), `0x2C` (oid=4), `0x30` (oid=8).
+  - `u32@0x14` — sentinel, always `0xFFFFFFFF`.
+  - `float@0x20` — IEEE 754 little-endian float, always `1.0f`. Presumed amplitude / gain scalar.
+  - All other bytes observed to be zero.
+
+Sample body (oid=0):
+
+```
+0000: a0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0010: 28 00 00 00 ff ff ff ff fe ff ff ff 00 00 00 00
+0020: 00 00 80 3f 00 44 00 00 ff ff 00 00 00 00 00 00
+0030: ff ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+...
+```
+
+### `Vide` chunks
+
+- Count: exactly 1 per project, OID `24`.
+- Body length: 130 bytes.
+- Partial layout:
+  - `u32@0x00` — header length indicator, always `0x76` (118).
+  - Bytes `[4..130)` are entirely zero.
+
+Decoded records:
+
+- `ClipRecord { oid, bodyLength, headerLen (u32@0), countField (u32@0x10), gainFloat (float@0x20) }`
+- `VideRecord { oid, bodyLength, headerLen (u32@0), isAllZeroAfterHeader }`
