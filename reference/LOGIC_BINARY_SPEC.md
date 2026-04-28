@@ -388,3 +388,35 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+### CorM CoreMIDI Port Table
+
+`CorM` chunks hold the project's CoreMIDI port table — one chunk per routing
+direction. Two chunks are present in every observed project:
+
+- `OID = 232` — input ports.
+- `OID = 236` — output ports.
+
+Body layout (after the 36-byte chunk header):
+
+| Offset | Size | Field               | Notes                                  |
+|--------|------|---------------------|----------------------------------------|
+| 0x00   | 2 B  | `body_length_u16`   | Little-endian, matches chunk header.   |
+| 0x02   | 2 B  | `port_count`        | 1 or 2 observed.                       |
+| 0x04   | 2 B  | `reserved`          | Always `0` in observed data.           |
+| 0x06   | 100 B| port slot 0         | See per-slot layout below.             |
+| 0x6A   | 100 B| port slot 1         | Present when `port_count >= 2`.        |
+
+Per-slot layout (100 bytes total):
+
+| Offset | Size | Field   | Notes                                                                 |
+|--------|------|---------|-----------------------------------------------------------------------|
+| +0x00  | 4 B  | `hash`  | `u32 LE`. Random-looking opaque handle. May have a printable-ASCII leading byte — the decoder must not let it bleed into the name. |
+| +0x04  | 96 B | `name`  | Null-padded ASCII port name, e.g. `"USB MIDI Device"`, `"UMC1820"`, `"Logic Pro Virtual In"`, `"Logic Pro Virtual Out"`. |
+
+Body lengths follow directly from the layout: `6 + 100 * port_count` →
+`0x6A` (106) for a 1-port table, `0xCE` (206) for a 2-port table.
+
+Decoded by `CorMDecoder` → `[CorMRecord { oid, bodyLength, ports:[CorMPort{hash,name}] }]`.
+Names are validated as printable ASCII; non-conforming slots are dropped
+from the record's `ports` list while the record itself is preserved.
