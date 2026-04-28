@@ -388,3 +388,27 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## 14. Hypr — Automation Parameter Catalogs
+
+Every project contains exactly 3 `Hypr` chunks that hold Logic's internal
+lookup tables for automation and MIDI controller metadata. The chunks are
+stable across projects (body lengths match byte-for-byte).
+
+### Known OID Roles
+
+| OID | Body | Category | Content |
+|:----|:----:|:---------|:--------|
+| 0   | 200  | automationMode | `[Volume, Automatic]` — master automation mode toggle. |
+| 4   | 920  | midiControls | `[Volume, MIDI Controls, Pan, Modulation, Pitch Bend, Aftertouch, Poly Aftertouch, Program, All Velocities]` — MIDI controller list. |
+| 8   | 6194 | gmDrumKit | 71-entry GM Drum Kit note-name map: `[Volume, GM Drum Kit, SLAP, SCRAPUSH, SCRAPULL, STICKS, SQ CLICK, METROCLICK, METROBELL, KICK 2, KICK 1, SIDESTICK, SD 1, HANDCLAP, SD 2, Closed HH, PED HH, Open HH, CRASH 1, ...]`. |
+
+### Decoding
+
+Entries are length-prefixed ASCII strings interspersed with binary metadata.
+The decoder scans for contiguous printable-ASCII runs of length 3..40
+containing at least one letter, then dedupes preserving discovery order.
+
+Decoder: `HyprDecoder.decode(data:) -> [HyprRecord]`.
