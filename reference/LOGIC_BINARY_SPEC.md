@@ -388,3 +388,35 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+### AuCO 204-byte Extended Variant
+
+Most `AuCO` bodies are 152 bytes and represent Environment placeholder
+channel strips. A smaller subset — the project's "real" tracks (e.g.
+`Audio 1..6`, `Aux 1..2`, `Inst 1..3`, `Output 1..2`) — are emitted as a
+204-byte extended variant. The first 152 bytes retain the same layout as
+the short form (type byte at 0x04, null-terminated ASCII name at 0x3C,
+etc.); the extended record appends a 52-byte block at 0x98..0xCC,
+dominated by an 11 × u32 LE flag array at `0x98..0xBC`.
+
+Layout (decoded by `AuCO204Decoder.swift`):
+
+| Body offset | Size | Meaning |
+|-------------|------|---------|
+| 0x04        | 1    | Type byte (0x40 Audio, 0x42 Aux, 0x43 Inst, 0x44 MonoOut, 0x4C StereoOut, ...) |
+| 0x3C        | ≤64  | Null-terminated ASCII strip name (`Audio 1`, `Aux 2`, `Output 1`, ...) |
+| 0x98..0xBC  | 44   | 11 × u32 LE flags, each observed to be 0 or 1 |
+| 0xBC..0xCC  | 16   | Trailing zeros in all observed samples |
+
+The 11 extended flags are likely per-strip automation / recording-state
+toggles (candidate meanings: arm, input monitor, freeze,
+automation-read, automation-write, automation-touch, automation-latch,
+automation-trim, group-enable, solo-safe, mute-safe). The exact
+assignment is not yet confirmed, so the decoder surfaces the raw
+`[UInt32]` array as `AuCO204Record.extendedFlags`.
+
+Sample counts (all bundled `logic-project-{1,2,3}.logicx` projects):
+
+- `logic-project-1`: 12 × 204-byte records vs ~300 × 152-byte
+  placeholders — the 12 correspond to `Audio 1..6`, `Aux 1..2`,
+  `Inst 1..3`, `Output 1..2`.
