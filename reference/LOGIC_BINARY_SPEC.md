@@ -388,3 +388,99 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+---
+
+## Styl Score Style Definitions
+
+The `Styl` chunk stores a single **Score Style** (a staff/instrument layout
+used by Logic's Score editor, e.g. `Piano 1/3`, `Drums`, ` Treble-8`). Stock
+projects ship with 32 built-in styles; custom projects may add more.
+
+### Body layout
+
+All offsets below are **within the chunk body** (i.e. after the 36-byte
+chunk header).
+
+| Offset      | Size | Field                 | Notes                                                |
+| :---------- | :--- | :-------------------- | :--------------------------------------------------- |
+| 0x00        | 4B   | Sub-record length     | LE u32 (`0x025C = 604` in the representative sample) |
+| 0x0E        | 10B  | ASCII marker          | Literal bytes `*New Style` (no NUL terminator)       |
+| after 0x18  | 0..N | Zero padding          | Variable-width run of `0x00`                         |
+| after pad   | 2B   | Label length          | LE u16; observed range `[1, 32]`                     |
+| after len   | N    | ASCII label           | `N = label length`, printable ASCII (0x20..0x7E)     |
+
+The `*New Style` marker is **fixed in every Styl body**; it is the anchor
+the decoder uses to locate the label. The label immediately follows the
+marker and any zero padding, stored as a u16 length-prefixed ASCII run.
+
+### Representative hex (oid=0, 100-byte body)
+
+```
+0000: 5c 02 00 00 00 00 00 00 00 00 00 00 00 00 2a 4e   |..............*N|
+0010: 65 77 20 53 74 79 6c 65 00 00 00 00 00 00 00 00   |ew Style........|
+0020: 00 00 00 00 00 00 05 00 20 41 75 74 6f 00 36 00   |........ Auto.6.|
+...
+```
+
+- `5c 02 00 00` — sub-record length `0x025C`.
+- `2a 4e 65 77 20 53 74 79 6c 65` at `0x0E` — `*New Style` marker.
+- `05 00` at `0x26` — u16 LE label length (5).
+- `20 41 75 74 6f` — ASCII `" Auto"`.
+
+Some built-in labels include a leading space (e.g. `" Auto"`, `" Bass"`,
+`" Treble"`); the decoder preserves spaces and only trims ASCII control
+characters (`< 0x20` or `0x7F`).
+
+### Decoder
+
+`Sources/LogicProMCP/Binary/Decoders/StylDecoder.swift`
+
+```swift
+public struct StylRecord: Sendable, Codable {
+    public let oid: UInt32
+    public let label: String
+    public let bodyLength: Int
+}
+
+public enum StylDecoder {
+    public static func decode(data: Data) -> [StylRecord]
+}
+```
+
+The decoder:
+
+1. Scans every chunk with the shared anchor-signature method (36-byte header
+   with the `02 00 00 00 [01|02] 00` signature at offset `0x16`).
+2. Filters to chunks with ID `Styl`.
+3. Locates the `*New Style` marker in each body.
+4. Skips the zero-padding run, then reads a u16 LE length prefix and that
+   many bytes of printable ASCII as the label.
+5. Falls back to scanning forward up to 256 bytes past the marker if the
+   immediate post-padding offset fails the length/printability check.
+
+### Stock OID → label map (32 entries, confirmed in all three fixtures)
+
+| OID | Label           | OID | Label           |
+| :-- | :-------------- | :-- | :-------------- |
+| 0   | ` Auto`         | 64  | `Horn in E`     |
+| 4   | ` Piano^`       | 68  | `Piccolo`       |
+| 8   | `Piano 1/3`     | 72  | `Baritone Sax6` |
+| 12  | `Piano 1+2/3`   | 76  | `Tenor Sax`     |
+| 16  | `Piano 1/3+4`   | 80  | `Alto Sax6`     |
+| 20  | `Piano 1+2/3+4` | 84  | `Soprano Sax`   |
+| 24  | `Organ 1/1/5`   | 88  | `Viola`         |
+| 28  | `Organ 1/3/5`   | 92  | `Violoncello`   |
+| 32  | `Organ 1+2/3/5` | 96  | `Contrabass6`   |
+| 36  | `Organ 1/3+4/5` | 100 | ` Treble-8`     |
+| 40  | `Organ 1+2/3+4/5` | 104 | ` Treble`     |
+| 44  | ` Bass`         | 108 | `Drums`         |
+| 48  | ` Treble+8`     | 112 | `Guitar6`       |
+| 52  | `Trumpet in B`  | 116 | `Guitar Mix^`   |
+| 56  | `Trumpet in A6` | 120 | ` Lead Sheet`   |
+| 60  | `Horn in F`     | 124 | `Guitar Mix 2^` |
+
+Some labels end in `^` or `6` — these glyphs are artefacts of Logic storing
+UI metadata (accidentals / clef badges) as trailing ASCII bytes inside the
+label payload. The decoder preserves them verbatim so callers can compare
+against Logic's exact display.
