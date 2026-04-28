@@ -38,12 +38,42 @@ struct ProjectDataInfo: Sendable, Codable {
     /// Environment object names from Envi chunks (stack grouping labels like
     /// "Backing Track", "Click Track", "Release Track", "Midi Triggers").
     var environmentLabels: [String] = []
+    /// Environment layer names parsed from `Layr` chunks
+    /// (e.g. "All Objects", "Global Objects", "Click & Ports", "MIDI Instr.", "Mixer").
+    /// Each entry corresponds to a layer in Logic Pro's Environment window.
+    var environmentLayerNames: [String] = []
     /// Full sub-track hierarchy grouped by function group / environment label.
     /// Each entry is a top-level stack with its channel strip children.
     var subTrackHierarchy: [SubTrackStack] = []
 
     /// Per-song lengths derived from the reference track regions (or marker boundaries as fallback).
     var songLengths: [SongLength] = []
+
+    // MARK: Extended reverse-engineering fields (from Decoders/)
+
+    /// Channel-strip type codes (audio/input/aux/instrument/output/bus/master) keyed by OID.
+    /// Populated from `AuCOTypeDecoder`.
+    var channelStripTypes: [String] = []  // e.g. ["audio", "monoInput", "aux", ...]
+
+    /// Arrangement-marker section names extracted from GenM or short TxSq chunks
+    /// ("Intro", "Verse", "Chorus", "Bridge"). Unioned across both sources.
+    var arrangementSectionNames: [String] = []
+
+    /// CoreMIDI port names as serialized in CorM chunks (e.g. "UMC1820", "Logic Pro Virtual In").
+    var coreMIDIPortNames: [String] = []
+
+    /// AU plugin component-code triples discovered in the binary.
+    /// Each entry is `"<type>/<subtype>/<manufacturer>"` (e.g. `"aufx/Comp/appl"`).
+    var pluginComponentCodes: [String] = []
+
+    /// Score-notation font-style labels from TxSt chunks (e.g. "Plain Text", "Bar Numbers").
+    var scoreStyleLabels: [String] = []
+
+    /// Score set title (e.g. "Score Set").
+    var scoreSetRoot: String?
+
+    /// Transport-globals ticks-per-bar from Trns chunk (typically 3840).
+    var trnsTicksPerBar: Int?
 }
 
 // MARK: - Channel Strip

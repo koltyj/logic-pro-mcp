@@ -41,6 +41,7 @@ enum ProjectDataParser {
     private static let idAuCO = "AuCO"
     private static let idTrak = "Trak"
     private static let idEnvi = "Envi"
+    private static let idLayr = "Layr"
 
     // Unity gain raw value for volume dB formula: dB = 40 * log10(value / unityGain)
     private static let unityGainRaw: Double = 1_509_949_440.0
@@ -147,6 +148,9 @@ enum ProjectDataParser {
         // Extract Envi environment labels (stack grouping labels)
         let environmentLabels = extractEnviNames(chunks: chunks, data: data)
 
+        // Extract Layr environment layer names (e.g. "All Objects", "Mixer")
+        let environmentLayerNames = extractLayrNames(chunks: chunks, data: data)
+
         // Extract Envi OID → name map for AuCO enrichment
         let enviNameMap = extractEnviNameMap(chunks: chunks, data: data)
 
@@ -181,10 +185,42 @@ enum ProjectDataParser {
         info.channelStrips = channelStrips
         info.trakEntries = trakEntries
         info.environmentLabels = environmentLabels
+        info.environmentLayerNames = environmentLayerNames
         info.subTrackHierarchy = subTrackHierarchy
 
         // Compute per-song lengths from reference track (or marker boundary fallback)
         info.songLengths = computeSongLengthsFromReference(info: info)
+
+        // Run the full extended-decoders pass and project the results onto
+        // the extended fields of ProjectDataInfo.
+        let decoded = DecodersAggregator.decodeAll(data: data)
+
+        info.channelStripTypes = decoded.auCOTypes.map { "\($0.type)" }
+
+        var sectionNames: [String] = []
+        sectionNames.append(contentsOf: decoded.genMMarkerTitles.compactMap { $0.name })
+        sectionNames.append(contentsOf: decoded.txSqMarkers.map { $0.markerName })
+        var seenSection = Set<String>()
+        info.arrangementSectionNames = sectionNames.filter { seenSection.insert($0).inserted }
+
+        var portNames: [String] = []
+        for rec in decoded.corMPorts {
+            portNames.append(contentsOf: rec.ports.map { $0.name })
+        }
+        var seenPort = Set<String>()
+        info.coreMIDIPortNames = portNames.filter { seenPort.insert($0).inserted }
+
+        info.pluginComponentCodes = decoded.pluginComponents.map {
+            "\($0.typeCode)/\($0.subtypeCode)/\($0.manufacturerCode)"
+        }
+
+        info.scoreStyleLabels = decoded.txStStyles.map { $0.styleLabel }
+
+        info.scoreSetRoot = decoded.scoreSetRoots.first?.label
+
+        info.trnsTicksPerBar = decoded.trnsGlobals
+            .compactMap { Int($0.gridValue) }
+            .first { $0 == 3840 }
 
         return info
     }
@@ -1505,6 +1541,112 @@ enum ProjectDataParser {
         if enviNoiseNames.contains(lower) { return nil }
         // Filter "Output N" patterns
         if lower.hasPrefix("output ") && lower.dropFirst(7).allSatisfy({ $0.isNumber || $0 == "-" }) { return nil }
+        return trimmed
+    }
+
+    // MARK: - Layr Environment Layer Name Extraction
+
+    /// Extract environment layer names from `Layr` chunks.
+    ///
+    /// Observed layout: each chunk body contains a sequence of fixed-size slots
+    /// (~46 bytes each). Each slot stores a length-prefixed ASCII name:
+    ///   0x00  2B LE u16  name length
+    ///   0x02  N bytes    ASCII name (no null terminator)
+    ///
+    /// Across multiple projects the expected names are:
+    ///   "All Objects", "Global Objects", "Click & Ports", "MIDI Instr.", "Mixer"
+    ///
+    /// Strategy:
+    ///   1. Try length-prefixed scan at candidate offsets (0x00, 0x02, 0x04, 0x08, 0x10).
+    ///   2. If nothing was found, scan for contiguous printable ASCII sequences of length >= 4.
+    /// Names are deduplicated across chunks while preserving first-seen order.
+    private static func extractLayrNames(chunks: [ChunkInfo], data: Data) -> [String] {
+        var result: [String] = []
+        var seen = Set<String>()
+
+        for chunk in chunks where chunk.id == idLayr {
+            guard chunk.bodyLength > 0 else { continue }
+            let body = Data(data[chunk.bodyOffset..<(chunk.bodyOffset + chunk.bodyLength)])
+
+            var found = extractLayrLengthPrefixed(body: body)
+            if found.isEmpty {
+                found = extractLayrContiguousAscii(body: body)
+            }
+
+            for name in found where seen.insert(name).inserted {
+                result.append(name)
+            }
+        }
+
+        return result
+    }
+
+    /// Scan a Layr body for length-prefixed ASCII names (u16 LE length + bytes).
+    /// Walks the full body byte-by-byte to be robust against slot-stride changes.
+    /// Accepts length in [1, 64] where the following bytes are all printable ASCII.
+    private static func extractLayrLengthPrefixed(body: Data) -> [String] {
+        var names: [String] = []
+        var seenLocal = Set<String>()
+
+        var off = 0
+        let total = body.count
+        while off + 2 <= total {
+            let len = Int(readLE16(body, at: off))
+            if len >= 1 && len <= 64 && off + 2 + len <= total {
+                let start = body.startIndex + off + 2
+                let end = start + len
+                let slice = body[start..<end]
+                if slice.allSatisfy({ $0 >= 0x20 && $0 < 0x7F }) {
+                    let name = String(decoding: slice, as: UTF8.self)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let validated = validateLayrName(name),
+                       seenLocal.insert(validated).inserted {
+                        names.append(validated)
+                    }
+                    // Skip past the decoded region to avoid overlapping matches
+                    off += 2 + len
+                    continue
+                }
+            }
+            off += 1
+        }
+        return names
+    }
+
+    /// Fallback: scan a Layr body for contiguous printable ASCII sequences of length >= 4.
+    private static func extractLayrContiguousAscii(body: Data) -> [String] {
+        var names: [String] = []
+        var seenLocal = Set<String>()
+        var run = ""
+
+        func flush() {
+            let trimmed = run.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.count >= 4, let validated = validateLayrName(trimmed),
+               seenLocal.insert(validated).inserted {
+                names.append(validated)
+            }
+            run = ""
+        }
+
+        for byte in body {
+            if byte >= 0x20 && byte < 0x7F {
+                run.append(Character(Unicode.Scalar(byte)))
+            } else {
+                flush()
+            }
+        }
+        flush()
+        return names
+    }
+
+    /// Validate a candidate Layr layer name. Requires at least one letter and a
+    /// sane length; rejects obvious non-layer strings.
+    private static func validateLayrName(_ candidate: String) -> String? {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 && trimmed.count <= 80 else { return nil }
+        guard trimmed.contains(where: { $0.isLetter }) else { return nil }
+        let lower = trimmed.lowercased()
+        guard !lower.hasPrefix("@"), !lower.hasPrefix("/"), !lower.hasPrefix("http") else { return nil }
         return trimmed
     }
 
