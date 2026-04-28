@@ -388,3 +388,44 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+### AuCn Routing Table
+
+Every Logic project binary contains exactly **13 `AuCn` chunks** that together
+describe a fixed-size routing table. They split cleanly into two categories:
+
+#### Small routing entries (12 of 13)
+
+- Body length is exactly **132 bytes**.
+- Constants within the body:
+  - `u32 @ 0x00 = 0x000000B0` (176) — secondary body length.
+  - `u32 @ 0x04 = 0x000000C0` (192) — header constant.
+  - `u16 @ 0x0A = 0x1235` (4661) — type signature.
+  - `u32 @ 0x10 = 0x000000B0` (176).
+- `u32 @ 0x14` encodes the **stable routing index** as `(index << 16) | 0x03`.
+  Across the 13 entries the raw values observed are
+  `0x03, 0x10003, 0x20003, …, 0xC0003`, giving routing indices `0..12`.
+- Because the big enable table (below) consumes routing index `1`, the 12
+  small entries expose the indices `{0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}`.
+
+#### Big enable table (1 of 13)
+
+- Always present at routing index `1` (typically `oid == 36`).
+- Body length is project-dependent. Confirmed samples:
+  - `logic-project-1`: **1384 bytes**
+  - `logic-project-2`: **1420 bytes**
+  - `logic-project-3`: **1412 bytes**
+- Reuses the same 0x80-byte header region as the small entries.
+- Beyond body offset `0x80` the body is a flat array of `u32` entries, each
+  observed to be `0` or `1`. This is the **per-strip enable-flag table**; the
+  entry count is approximately (but not always exactly) equal to the project's
+  `AuCO` channel-strip count. For `logic-project-1` the table contains 313
+  `u32` entries against 326 `AuCO` chunks.
+- Flag count computed as `(bodyLength - 0x80) / 4`.
+
+#### Decoder
+
+`Sources/LogicProMCP/Binary/Decoders/AuCnDecoder.swift` provides an isolated
+decoder that returns `(entries: [AuCnRoutingEntry], enableTable:
+AuCnEnableTable?)` for a ProjectData blob. The decoder copies the chunk
+scanner so it can be used independently of `ProjectDataParser`.
