@@ -388,3 +388,22 @@ The extractor scans for contiguous printable ASCII sequences (len > 6) and categ
 - `AuCO` may contain output labels (e.g., `Output 1`, `Bus 1`, `Stereo Out`); these are extracted into `channel_strip.output` when present.
 - `channel_strip.config_records` provides per‑strip summaries of AuCO record lengths and byte-offset stats (currently offsets 0x50/0x51 for length‑241 records).
 - `channel_strip.routing_records` and `channel_strip.automation_records` provide per‑strip summaries of AuCn/AuCU record lengths and decoded plist root keys.
+
+### BarNumberAPI (Unified Tick↔Bar)
+
+- `Sources/LogicProMCP/Binary/Decoders/BarNumberAPI.swift` provides a unified, standalone decoder that converts absolute ticks to fractional 1-based bar numbers (and back) directly from a `ProjectData` byte blob.
+- The API is intentionally independent of `ProjectDataParser`: it replays just the chunk scan, tempo decoding, and marker-offset calculation it needs, so callers that only need bar numbering do not have to run the full parser pipeline.
+- Inputs consumed from each `EvSq` chunk body:
+  - standard tempo signature `7F 00 00 01 ... milliTempo(BE u32) ... tick(LE u64)` (BPM = milliTempo/10000)
+  - type-96 tempo bridge pair: row A `[96, seq_tick, 0, 0x0100007F|0x8100007F]` + row B `[tempo_raw, 0x88400000, tempo_tick_abs, 0]` with `tempo_raw = BPM*10000`
+  - type-18 marker triplets: head `[18, start_tick, 0, ...]`, marker `[oid, 0x88000000, type, duration]`, tail `[0, 0x88000000, 0, 0]` — only the head `start_tick` is consumed to derive the timeline pre-roll offset
+- Timeline offset: mirrors `ProjectDataParser.computeTimelineTickOffset`. If the minimum type-18 head tick implies a bar > 200, round it down to the nearest bar boundary (keeping one bar of headroom) and subtract it from every anchor tick so that normalized tick 0 == bar 1.0. Otherwise the offset is 0.
+- Anchors: sorted by normalized tick, deduplicated, and always include a synthesized entry at `tick=0, bar=1.0` (carrying the first discovered tempo, or 120 BPM as a last-resort default). Each anchor stores `{ tick, bar, bpm }` and is `Sendable + Codable`.
+- Interpolation: piecewise-linear between consecutive anchors, assuming 4/4 within each segment (`ticksPerBar = 3840`). Ticks at or below the first anchor clamp to bar 1.0; ticks beyond the last anchor extrapolate linearly using the last segment's 4/4 slope.
+- Public surface:
+  - `BarAnchor { tick: Int; bar: Double; bpm: Double }`
+  - `BarNumberAPI.build(from data: Data) -> BarNumberAPI`
+  - `BarNumberAPI.bar(forTick: Int) -> Double`
+  - `BarNumberAPI.tick(forBar: Double) -> Int`
+  - `BarNumberAPI.anchors`, `.ticksPerBar` (3840), `.timelineTickOffset`
+- Round-trip invariant: for every bar `b` the identity `abs(bar(forTick: tick(forBar: b)) - b) < 0.001` holds within the range covered by anchors (and in the 4/4-extrapolated tail).
