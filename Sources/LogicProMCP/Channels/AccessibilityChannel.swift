@@ -350,6 +350,7 @@ actor AccessibilityChannel: Channel {
         }
         var info = ProjectInfo()
         info.name = name
+        info.trackCount = AXLogicProElements.allTrackHeaders().count
         info.lastUpdated = Date()
         return encodeResult(info)
     }
