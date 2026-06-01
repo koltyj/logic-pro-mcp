@@ -8,6 +8,11 @@ import Foundation
 actor ChannelRouter {
     private var channels: [ChannelID: any Channel] = [:]
 
+    /// Read-only accessor used by doctor / introspection.
+    func channel(for id: ChannelID) -> (any Channel)? {
+        channels[id]
+    }
+
     /// Static routing table: operation → ordered list of channels to try.
     /// Operations are prefixed by category (e.g., "transport.play", "track.mute").
     private static let routingTable: [String: [ChannelID]] = [

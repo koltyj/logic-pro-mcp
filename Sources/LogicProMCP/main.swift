@@ -11,6 +11,12 @@ if CommandLine.arguments.contains("--check-permissions") {
     }
 }
 
+// Handle `doctor` subcommand
+if CommandLine.arguments.contains("doctor") {
+    let code = await DoctorCommand.run()
+    exit(Int32(code))
+}
+
 // Start the MCP server
 let server = LogicProServer()
 do {

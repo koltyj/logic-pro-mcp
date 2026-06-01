@@ -10,6 +10,9 @@ actor LogicProServer {
     private let cache: StateCache
     private let poller: StatePoller
 
+    /// Read-only accessor used by doctor / introspection.
+    nonisolated var channelRouter: ChannelRouter { router }
+
     // Channel instances
     private let axChannel: AccessibilityChannel
     private let cgEventChannel: CGEventChannel
@@ -149,17 +152,21 @@ actor LogicProServer {
 
     // MARK: - Server Lifecycle
 
-    /// Start the server: register channels, start poller, begin MCP transport.
-    func start() async throws {
-        // Register channels with router
+    /// Register channels with the router and start them. Used by both
+    /// the full server lifecycle and the `doctor` subcommand.
+    func setupChannels() async {
         await router.register(coreMIDIChannel)
         await router.register(oscChannel)
         await router.register(axChannel)
         await router.register(cgEventChannel)
         await router.register(appleScriptChannel)
 
-        // Start all channels
         await router.startAll()
+    }
+
+    /// Start the server: register channels, start poller, begin MCP transport.
+    func start() async throws {
+        await setupChannels()
 
         // Start the state poller
         await poller.start()
@@ -179,6 +186,13 @@ actor LogicProServer {
         await server.waitUntilCompleted()
 
         // Cleanup
+        await poller.stop()
+        await router.stopAll()
+    }
+
+    /// Tear down channels and the poller. Used by `doctor` and any caller
+    /// that drove `setupChannels()` directly without entering the MCP loop.
+    func stop() async {
         await poller.stop()
         await router.stopAll()
     }
