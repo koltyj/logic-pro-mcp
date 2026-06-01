@@ -111,9 +111,13 @@ enum AXValueExtractors {
     static func extractTransportState(from transport: AXUIElement) -> TransportState {
         var state = TransportState()
 
-        // Find and read transport button states
-        let buttons = AXHelpers.findAllDescendants(of: transport, role: kAXButtonRole, maxDepth: 4)
-        for button in buttons {
+        // Find and read transport button states (both AXButton and AXCheckBox —
+        // Creator Studio renders Play/Record/Cycle/Metronome as AXCheckBox, not AXButton)
+        var controls: [AXUIElement] = []
+        for role in [kAXButtonRole, kAXCheckBoxRole] {
+            controls.append(contentsOf: AXHelpers.findAllDescendants(of: transport, role: role, maxDepth: 4))
+        }
+        for button in controls {
             let desc = AXHelpers.getDescription(button) ?? AXHelpers.getTitle(button) ?? ""
             let pressed = extractButtonState(button) ?? false
             let descLower = desc.lowercased()
