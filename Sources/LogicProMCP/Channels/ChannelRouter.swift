@@ -11,11 +11,14 @@ actor ChannelRouter {
     /// Static routing table: operation → ordered list of channels to try.
     /// Operations are prefixed by category (e.g., "transport.play", "track.mute").
     private static let routingTable: [String: [ChannelID]] = [
-        // Transport — MMC via CoreMIDI, fallback to keyboard, then AppleScript
-        "transport.play":             [.coreMIDI, .cgEvent, .appleScript],
-        "transport.stop":             [.coreMIDI, .cgEvent, .appleScript],
-        "transport.record":           [.coreMIDI, .cgEvent, .appleScript],
-        "transport.pause":            [.coreMIDI, .cgEvent, .appleScript],
+        // Transport — AX click (most reliable, state-aware, works on Creator
+        // Studio where MMC is ignored), then CGEvent keyboard, then CoreMIDI
+        // MMC (kept as last resort for variants without AX support), then
+        // AppleScript (works on desktop Logic, no-op on Creator Studio).
+        "transport.play":             [.accessibility, .cgEvent, .coreMIDI, .appleScript],
+        "transport.stop":             [.accessibility, .cgEvent, .coreMIDI, .appleScript],
+        "transport.record":           [.accessibility, .cgEvent, .coreMIDI, .appleScript],
+        "transport.pause":            [.cgEvent, .coreMIDI, .appleScript],
         "transport.rewind":           [.coreMIDI, .cgEvent],
         "transport.fast_forward":     [.coreMIDI, .cgEvent],
         "transport.toggle_cycle":     [.cgEvent, .accessibility],

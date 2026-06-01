@@ -30,18 +30,33 @@ enum AXLogicProElements {
         return AXHelpers.findDescendant(of: window, role: kAXGroupRole, identifier: "Transport")
     }
 
-    /// Find a specific transport button by its title or description.
+    /// Find a specific transport control by its title or description.
+    /// Logic's Control Bar mixes AXButton (Stop, Flashback) with AXCheckBox
+    /// (Play, Record, Cycle, Metronome, Solo, etc.), so we search both roles.
+    ///
+    /// Search scope: transport bar first (fast path on desktop Logic where
+    /// getTransportBar() finds the AXToolbar). On Logic Pro Creator Studio,
+    /// the Control Bar is an AXGroup (not AXToolbar), so getTransportBar()
+    /// returns nil and we fall back to a window-wide search.
     static func findTransportButton(named name: String) -> AXUIElement? {
-        guard let transport = getTransportBar() else { return nil }
-        // Try by title first
-        if let button = AXHelpers.findDescendant(of: transport, role: kAXButtonRole, title: name) {
-            return button
-        }
-        // Try by description (some buttons use AXDescription instead of AXTitle)
-        let buttons = AXHelpers.findAllDescendants(of: transport, role: kAXButtonRole, maxDepth: 4)
-        for button in buttons {
-            if AXHelpers.getDescription(button) == name {
-                return button
+        // Search root: prefer the transport bar, fall back to the main window.
+        let searchRoots: [AXUIElement] = {
+            var roots: [AXUIElement] = []
+            if let bar = getTransportBar() { roots.append(bar) }
+            if let window = mainWindow() { roots.append(window) }
+            return roots
+        }()
+        for root in searchRoots {
+            for role in [kAXButtonRole, kAXCheckBoxRole] {
+                if let match = AXHelpers.findDescendant(of: root, role: role, title: name, maxDepth: 8) {
+                    return match
+                }
+                let candidates = AXHelpers.findAllDescendants(of: root, role: role, maxDepth: 8)
+                for c in candidates {
+                    if AXHelpers.getDescription(c) == name {
+                        return c
+                    }
+                }
             }
         }
         return nil

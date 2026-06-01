@@ -36,6 +36,12 @@ actor AccessibilityChannel: Channel {
             return getTransportState()
 
         // MARK: - Transport mutations
+        case "transport.play":
+            return toggleTransportButton(named: "Play")
+        case "transport.stop":
+            return toggleTransportButton(named: "Stop")
+        case "transport.record":
+            return toggleTransportButton(named: "Record")
         case "transport.toggle_cycle":
             return toggleTransportButton(named: "Cycle")
         case "transport.toggle_metronome":
