@@ -42,6 +42,18 @@ struct ServerConfig: Sendable {
     static let channelHealthCheckTimeout: TimeInterval = 3.0
 
     // MARK: - Logic Pro
+    /// Primary bundle ID (desktop Logic Pro). Kept for backwards compatibility.
     static let logicProBundleID = "com.apple.logic10"
     static let logicProProcessName = "Logic Pro"
+    /// All recognised Logic Pro bundle identifiers. Includes desktop Logic Pro
+    /// and the Mac-Catalyst port of Logic Pro for iPad ("Logic Pro Creator Studio").
+    static let logicProBundleIDs: [String] = [
+        "com.apple.logic10",     // Desktop Logic Pro (10.x / 11.x)
+        "com.apple.mobilelogic", // Logic Pro for iPad on Mac (Creator Studio)
+    ]
+    /// Display names a Logic variant may report. Used for process name matching.
+    static let logicProProcessNames: [String] = [
+        "Logic Pro",
+        "Logic Pro Creator Studio",
+    ]
 }
