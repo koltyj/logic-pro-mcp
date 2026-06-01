@@ -20,6 +20,13 @@ enum AXLogicProElements {
     // MARK: - Transport
 
     /// Find the transport bar area (toolbar/group containing play, stop, record, etc.)
+    ///
+    /// Desktop Logic Pro exposes the Control Bar as either an AXToolbar or an
+    /// AXGroup with identifier "Transport". Logic Pro Creator Studio v12.2
+    /// renders the Control Bar as an AXGroup WITHOUT that identifier, so both
+    /// lookups miss. As a last resort we return the main window itself so
+    /// downstream consumers (extractTransportState, findTransportButton, etc.)
+    /// can search the entire window subtree for individual transport controls.
     static func getTransportBar() -> AXUIElement? {
         guard let window = mainWindow() else { return nil }
         // Logic Pro's transport is typically an AXToolbar or AXGroup near the top
@@ -27,7 +34,12 @@ enum AXLogicProElements {
             return toolbar
         }
         // Fallback: search for a group containing transport-like buttons
-        return AXHelpers.findDescendant(of: window, role: kAXGroupRole, identifier: "Transport")
+        if let group = AXHelpers.findDescendant(of: window, role: kAXGroupRole, identifier: "Transport") {
+            return group
+        }
+        // Creator Studio fallback: return the main window so consumers do a
+        // window-wide search for the relevant transport controls.
+        return window
     }
 
     /// Find a specific transport control by its title or description.
