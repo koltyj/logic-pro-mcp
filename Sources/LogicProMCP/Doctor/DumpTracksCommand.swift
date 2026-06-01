@@ -47,6 +47,29 @@ enum DumpTracksCommand {
             print("  [\(i)] role=\(r) desc=\"\(d)\"")
         }
         print("")
+        print("=== Verification: findTrackNameField(0) ===")
+        if let field = AXLogicProElements.findTrackNameField(trackIndex: 0) {
+            let role = AXHelpers.getRole(field) ?? "?"
+            let desc: String = AXHelpers.getAttribute(field, kAXDescriptionAttribute) ?? ""
+            let value: String = AXHelpers.getAttribute(field, kAXValueAttribute) ?? ""
+            let title: String = AXHelpers.getTitle(field) ?? ""
+            print("  Returned: [\(role)] desc=\"\(desc)\" value=\"\(value)\" title=\"\(title)\"")
+            // List available AX attributes for this field
+            var attrNames: CFArray?
+            AXUIElementCopyAttributeNames(field, &attrNames)
+            if let names = attrNames as? [String] {
+                print("  Attributes: \(names.joined(separator: ", "))")
+            }
+            // List supported actions
+            var actionNames: CFArray?
+            AXUIElementCopyActionNames(field, &actionNames)
+            if let actions = actionNames as? [String] {
+                print("  Actions: \(actions.joined(separator: ", "))")
+            }
+        } else {
+            print("  Returned: NIL")
+        }
+        print("")
         print("=== Verification: AXValueExtractors.extractTrackState() per track ===")
         for (i, h) in headers.enumerated() {
             let track = AXValueExtractors.extractTrackState(from: h, index: i)
