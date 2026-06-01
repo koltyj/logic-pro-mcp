@@ -162,21 +162,46 @@ enum AXValueExtractors {
     // MARK: - Private helpers
 
     private static func extractTrackName(from header: AXUIElement) -> String {
-        // Try static text first
-        if let text = AXHelpers.findDescendant(of: header, role: kAXStaticTextRole, maxDepth: 3),
-           let name = extractTextValue(text), !name.isEmpty {
+        // Desktop Logic Pro 12.2: each AXLayoutItem track row has AXDescription
+        // of the form `Track N "<name>"` (smart quotes \u{201C}/\u{201D}). Parse it.
+        if let headerDesc: String = AXHelpers.getAttribute(header, kAXDescriptionAttribute),
+           let name = parseQuotedTrackName(headerDesc) {
             return name
         }
-        // Try text field
-        if let field = AXHelpers.findDescendant(of: header, role: kAXTextFieldRole, maxDepth: 3),
-           let name = extractTextValue(field), !name.isEmpty {
+        // Fallback: the AXTextField inside the row holds the name in its AXDescription
+        // (its VALUE is empty unless actively being edited).
+        if let field = AXHelpers.findDescendant(of: header, role: kAXTextFieldRole, maxDepth: 3) {
+            if let fieldDesc: String = AXHelpers.getAttribute(field, kAXDescriptionAttribute), !fieldDesc.isEmpty {
+                return fieldDesc
+            }
+            if let name = extractTextValue(field), !name.isEmpty {
+                return name
+            }
+        }
+        if let text = AXHelpers.findDescendant(of: header, role: kAXStaticTextRole, maxDepth: 3),
+           let name = extractTextValue(text), !name.isEmpty {
             return name
         }
         return AXHelpers.getTitle(header) ?? "Untitled"
     }
 
+    /// Parse a Logic Pro track row description of the form `Track 1 "Deluxe Classic"`.
+    /// Logic uses smart quotes (\u{201C} / \u{201D}); accept straight quotes too as a safety net.
+    private static func parseQuotedTrackName(_ desc: String) -> String? {
+        let openQuotes: [Character] = ["\u{201C}", "\""]
+        let closeQuotes: [Character] = ["\u{201D}", "\""]
+        guard let openIdx = desc.firstIndex(where: { openQuotes.contains($0) }) else { return nil }
+        let afterOpen = desc.index(after: openIdx)
+        guard let closeIdx = desc[afterOpen...].firstIndex(where: { closeQuotes.contains($0) }) else { return nil }
+        let name = String(desc[afterOpen..<closeIdx])
+        return name.isEmpty ? nil : name
+    }
+
     private static func extractTrackButtonState(from header: AXUIElement, prefix: String) -> Bool? {
+        // Desktop Logic Pro 12.2 renders Mute/Solo/Record/Input as AXCheckBox; older
+        // Logic versions and Creator Studio may use AXButton. Iterate both roles.
         let buttons = AXHelpers.findAllDescendants(of: header, role: kAXButtonRole, maxDepth: 4)
+                    + AXHelpers.findAllDescendants(of: header, role: kAXCheckBoxRole, maxDepth: 4)
         for button in buttons {
             let desc = AXHelpers.getDescription(button) ?? AXHelpers.getTitle(button) ?? ""
             if desc.hasPrefix(prefix) || desc.lowercased().contains(prefix.lowercased()) {

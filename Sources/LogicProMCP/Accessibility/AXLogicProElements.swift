@@ -77,17 +77,42 @@ enum AXLogicProElements {
     // MARK: - Tracks
 
     /// Find the track header area containing individual track rows.
+    /// On desktop Logic Pro 12.2 the track headers live in an `AXGroup` whose
+    /// `AXDescription` is "Tracks header"; each child is an `AXLayoutItem` with
+    /// `AXDescription` of the form `Track N "<name>"`. This is a stable Logic
+    /// identifier — verified via the `dump-tracks` subcommand.
+    /// Legacy paths (identified AXList "Track Headers", AXScrollArea "Tracks") are
+    /// kept first for compatibility with Creator Studio / older Logic versions.
     static func getTrackHeaders() -> AXUIElement? {
         guard let window = mainWindow() else { return nil }
-        // Track headers are typically in a scrollable list/table area
         if let area = AXHelpers.findDescendant(of: window, role: kAXListRole, identifier: "Track Headers") {
             return area
         }
-        // Fallback: look for an AXScrollArea containing AXRow or AXGroup children
         if let area = AXHelpers.findDescendant(of: window, role: kAXScrollAreaRole, identifier: "Tracks") {
             return area
         }
-        return AXHelpers.findDescendant(of: window, role: kAXOutlineRole, maxDepth: 5)
+        // Desktop Logic Pro 12.2: AXGroup with AXDescription "Tracks header"
+        if let group = findDescendantByDescription(window, description: "Tracks header", maxDepth: 12) {
+            return group
+        }
+        return nil
+    }
+
+    /// Walk descendants looking for an element whose AXDescription matches.
+    /// Used for Logic Pro 12.2 where containers are tagged via AXDescription
+    /// rather than AXIdentifier.
+    static func findDescendantByDescription(_ element: AXUIElement, description target: String, maxDepth: Int) -> AXUIElement? {
+        guard maxDepth > 0 else { return nil }
+        for child in AXHelpers.getChildren(element) {
+            let desc: String = AXHelpers.getAttribute(child, kAXDescriptionAttribute) ?? ""
+            if desc == target {
+                return child
+            }
+            if let found = findDescendantByDescription(child, description: target, maxDepth: maxDepth - 1) {
+                return found
+            }
+        }
+        return nil
     }
 
     /// Find a track header at a specific index (0-based).

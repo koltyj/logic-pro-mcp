@@ -31,7 +31,7 @@ struct ResourceHandlers {
             return try await readMixer(cache: cache, uri: uri)
 
         case "logic://project/info":
-            return try await readProjectInfo(cache: cache, uri: uri)
+            return try await readProjectInfo(cache: cache, router: router, uri: uri)
 
         case "logic://midi/ports":
             return try await readMIDIPorts(router: router, uri: uri)
@@ -80,11 +80,13 @@ struct ResourceHandlers {
         )
     }
 
-    private static func readProjectInfo(cache: StateCache, uri: String) async throws -> ReadResource.Result {
-        let info = await cache.getProject()
-        let json = encodeJSON(info)
+    private static func readProjectInfo(cache: StateCache, router: ChannelRouter, uri: String) async throws -> ReadResource.Result {
+        // The cache's project state is never populated by any poller, so fall through
+        // to the live AX read via the channel router. AccessibilityChannel.getProjectInfo()
+        // reads the window title; we parse out the project name and persist to cache.
+        let result = await router.route(operation: "project.get_info")
         return ReadResource.Result(
-            contents: [.text(json, uri: uri, mimeType: "application/json")]
+            contents: [.text(result.message, uri: uri, mimeType: "application/json")]
         )
     }
 

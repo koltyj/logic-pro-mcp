@@ -335,9 +335,21 @@ actor AccessibilityChannel: Channel {
         guard let window = AXLogicProElements.mainWindow() else {
             return .error("Cannot locate Logic Pro main window")
         }
-        let title = AXHelpers.getTitle(window) ?? "Unknown"
+        // Desktop Logic Pro 12.2's window title is roughly "<patch-or-junk><project-name> - <view>".
+        // Strip the view suffix so the project name is at least the last token of useful info.
+        // AppleScript would give us the clean document name but `name of front document` hangs
+        // unpredictably in MCP context — defer cleaner extraction to a v1.1 patch.
+        let raw = AXHelpers.getTitle(window) ?? "Unknown"
+        let viewSuffixes = [" - Tracks", " - Mixer", " - Score", " - Piano Roll", " - Step Editor"]
+        var name = raw
+        for suffix in viewSuffixes {
+            if name.hasSuffix(suffix) {
+                name = String(name.dropLast(suffix.count))
+                break
+            }
+        }
         var info = ProjectInfo()
-        info.name = title
+        info.name = name
         info.lastUpdated = Date()
         return encodeResult(info)
     }

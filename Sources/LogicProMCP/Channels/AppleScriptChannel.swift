@@ -32,6 +32,9 @@ actor AppleScriptChannel: Channel {
         case "project.save":
             return await runScript(saveProjectScript())
 
+        case "project.get_info":
+            return await getProjectInfo()
+
         // Transport fallbacks (AppleScript is last resort for these)
         case "transport.play":
             return await runScript(transportScript(action: "play"))
@@ -123,6 +126,55 @@ actor AppleScriptChannel: Channel {
             save front document
         end tell
         """
+    }
+
+    /// Read the project name + path via AppleScript, return a ProjectInfo-shaped JSON object.
+    /// Logic Pro's AppleScript dictionary exposes `name` and `path` of the front document
+    /// reliably on desktop Logic; tempo / sample rate / etc. are not exposed and remain
+    /// at struct defaults until a tempo poller exists.
+    private func getProjectInfo() async -> ChannelResult {
+        var errorDict: NSDictionary?
+        let nameScript = NSAppleScript(source: """
+        tell application "Logic Pro"
+            try
+                return name of front document
+            on error
+                return ""
+            end try
+        end tell
+        """)
+        let nameResult = nameScript?.executeAndReturnError(&errorDict)
+        let name = nameResult?.stringValue ?? ""
+
+        errorDict = nil
+        let pathScript = NSAppleScript(source: """
+        tell application "Logic Pro"
+            try
+                return POSIX path of (path of front document)
+            on error
+                return ""
+            end try
+        end tell
+        """)
+        let pathResult = pathScript?.executeAndReturnError(&errorDict)
+        let path = pathResult?.stringValue ?? ""
+
+        var info = ProjectInfo()
+        info.name = name
+        info.filePath = path.isEmpty ? nil : path
+        info.lastUpdated = Date()
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        do {
+            let data = try encoder.encode(info)
+            guard let json = String(data: data, encoding: .utf8) else {
+                return .error("Failed to encode ProjectInfo to UTF-8")
+            }
+            return .success(json)
+        } catch {
+            return .error("ProjectInfo encoding failed: \(error.localizedDescription)")
+        }
     }
 
     private func transportScript(action: String) -> String {
