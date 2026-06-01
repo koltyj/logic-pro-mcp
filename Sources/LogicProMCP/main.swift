@@ -17,6 +17,11 @@ if CommandLine.arguments.contains("doctor") {
     exit(Int32(code))
 }
 
+// Handle `dump-tracks` subcommand — AX archaeology utility
+if CommandLine.arguments.contains("dump-tracks") {
+    exit(Int32(DumpTracksCommand.run()))
+}
+
 // Start the MCP server
 let server = LogicProServer()
 do {
