@@ -52,7 +52,7 @@ enum DoctorCommand {
         print(String(repeating: "-", count: 72))
         var anyFail = false
         for r in results {
-            let status = r.available ? "OK" : "FAIL"
+            let status = r.available ? "✓ OK" : "✗ FAIL"
             if !r.available { anyFail = true }
             let latency = String(format: "%.1f ms", r.latencyMs)
             let row = r.channel.padding(toLength: 16, withPad: " ", startingAt: 0)
