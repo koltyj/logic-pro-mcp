@@ -15,11 +15,14 @@ enum InputValidation {
         label: String
     ) -> Validation<Int> {
         for key in keys {
-            if let value = params[key]?.intValue {
-                return validate(value, range: range, label: label)
-            }
-            if let string = params[key]?.stringValue, let value = Int(string) {
-                return validate(value, range: range, label: label)
+            if params[key] != nil {
+                if let value = params[key]?.intValue {
+                    return validate(value, range: range, label: label)
+                }
+                if let string = params[key]?.stringValue, let value = Int(string) {
+                    return validate(value, range: range, label: label)
+                }
+                return .failure("\(label) must be a valid integer")
             }
         }
         if let defaultValue {
@@ -36,11 +39,14 @@ enum InputValidation {
         label: String
     ) -> Validation<Double> {
         for key in keys {
-            if let value = params[key]?.doubleValue {
-                return validate(value, range: range, label: label)
-            }
-            if let string = params[key]?.stringValue, let value = Double(string) {
-                return validate(value, range: range, label: label)
+            if params[key] != nil {
+                if let value = params[key]?.doubleValue {
+                    return validate(value, range: range, label: label)
+                }
+                if let string = params[key]?.stringValue, let value = Double(string) {
+                    return validate(value, range: range, label: label)
+                }
+                return .failure("\(label) must be a valid number")
             }
         }
         if let defaultValue {
@@ -58,8 +64,11 @@ enum InputValidation {
         label: String
     ) -> Validation<String> {
         for key in keys {
-            if let value = params[key]?.stringValue {
-                return validate(value, maxLength: maxLength, allowEmpty: allowEmpty, label: label)
+            if params[key] != nil {
+                if let value = params[key]?.stringValue {
+                    return validate(value, maxLength: maxLength, allowEmpty: allowEmpty, label: label)
+                }
+                return .failure("\(label) must be a valid string")
             }
         }
         if let defaultValue {

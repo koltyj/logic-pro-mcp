@@ -118,8 +118,26 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_cycle_range":
-            let start = params["start"]?.intValue ?? 1
-            let end = params["end"]?.intValue ?? 5
+            let start: Int
+            if let startParam = params["start"] {
+                guard let startValue = startParam.intValue else {
+                    return CallTool.Result(content: [.text("start must be a valid integer")], isError: true)
+                }
+                start = startValue
+            } else {
+                start = 1
+            }
+
+            let end: Int
+            if let endParam = params["end"] {
+                guard let endValue = endParam.intValue else {
+                    return CallTool.Result(content: [.text("end must be a valid integer")], isError: true)
+                }
+                end = endValue
+            } else {
+                end = 5
+            }
+
             guard start >= 1, end >= start else {
                 return CallTool.Result(content: [.text("cycle range requires start >= 1 and end >= start")], isError: true)
             }
