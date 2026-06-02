@@ -136,12 +136,7 @@ actor AppleScriptChannel: Channel {
     // MARK: - Helpers
 
     private func escapeJSON(_ string: String) -> String {
-        string
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-            .replacingOccurrences(of: "\t", with: "\\t")
+        escapeAppleScriptString(string)
     }
 
     private func escapeAppleScriptString(_ string: String) -> String {

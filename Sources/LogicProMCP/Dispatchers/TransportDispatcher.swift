@@ -75,19 +75,8 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_tempo":
-            let tempo: Double
-            switch InputValidation.double(
-                params,
-                keys: ["tempo", "bpm"],
-                default: 120.0,
-                range: 20.0...999.0,
-                label: "tempo"
-            ) {
-            case .success(let value):
-                tempo = value
-            case .failure(let message):
-                return CallTool.Result(content: [.text(message)], isError: true)
-            }
+            let tempoResult = InputValidation.double(params, keys: ["tempo", "bpm"], default: 120.0, range: 20.0...999.0, label: "tempo")
+            guard case .success(let tempo) = tempoResult else { return tempoResult.callToolResult() }
             let result = await router.route(
                 operation: "transport.set_tempo",
                 params: ["bpm": String(tempo)]
