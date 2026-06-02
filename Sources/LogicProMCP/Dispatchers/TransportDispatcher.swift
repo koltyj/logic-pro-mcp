@@ -75,9 +75,19 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_tempo":
-            let tempo = params["tempo"]?.doubleValue
-                ?? params["bpm"]?.doubleValue
-                ?? 120.0
+            let tempo: Double
+            switch InputValidation.double(
+                params,
+                keys: ["tempo", "bpm"],
+                default: 120.0,
+                range: 20.0...999.0,
+                label: "tempo"
+            ) {
+            case .success(let value):
+                tempo = value
+            case .failure(let message):
+                return CallTool.Result(content: [.text(message)], isError: true)
+            }
             let result = await router.route(
                 operation: "transport.set_tempo",
                 params: ["bpm": String(tempo)]
@@ -86,6 +96,9 @@ struct TransportDispatcher {
 
         case "goto_position":
             if let bar = params["bar"]?.intValue {
+                guard bar >= 1 else {
+                    return CallTool.Result(content: [.text("bar must be 1 or greater")], isError: true)
+                }
                 let result = await router.route(
                     operation: "transport.goto_position",
                     params: ["position": "\(bar).1.1.1"]
@@ -95,6 +108,9 @@ struct TransportDispatcher {
             let time = params["time"]?.stringValue
                 ?? params["position"]?.stringValue
                 ?? "1.1.1.1"
+            guard Self.isSafePosition(time) else {
+                return CallTool.Result(content: [.text("time/position must use digits separated by ':' or '.'")], isError: true)
+            }
             let result = await router.route(
                 operation: "transport.goto_position",
                 params: ["position": time]
@@ -104,6 +120,9 @@ struct TransportDispatcher {
         case "set_cycle_range":
             let start = params["start"]?.intValue ?? 1
             let end = params["end"]?.intValue ?? 5
+            guard start >= 1, end >= start else {
+                return CallTool.Result(content: [.text("cycle range requires start >= 1 and end >= start")], isError: true)
+            }
             let result = await router.route(
                 operation: "transport.set_cycle_range",
                 params: ["start": "\(start).1.1.1", "end": "\(end).1.1.1"]
@@ -116,5 +135,13 @@ struct TransportDispatcher {
                 isError: true
             )
         }
+    }
+
+    private static func isSafePosition(_ value: String) -> Bool {
+        let allowed = CharacterSet(charactersIn: "0123456789:.")
+        return !value.isEmpty
+            && value.count <= 32
+            && value.rangeOfCharacter(from: allowed.inverted) == nil
+            && value.contains { $0 == "." || $0 == ":" }
     }
 }

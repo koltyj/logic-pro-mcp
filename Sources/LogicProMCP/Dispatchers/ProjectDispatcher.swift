@@ -42,9 +42,12 @@ struct ProjectDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "open":
-            let path = params["path"]?.stringValue ?? ""
-            guard !path.isEmpty else {
-                return CallTool.Result(content: [.text("open requires 'path' param")], isError: true)
+            let path: String
+            switch InputValidation.logicProjectPath(params, mustExist: true) {
+            case .success(let value):
+                path = value
+            case .failure(let message):
+                return CallTool.Result(content: [.text(message)], isError: true)
             }
             let result = await router.route(
                 operation: "project.open",
@@ -57,9 +60,12 @@ struct ProjectDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "save_as":
-            let path = params["path"]?.stringValue ?? ""
-            guard !path.isEmpty else {
-                return CallTool.Result(content: [.text("save_as requires 'path' param")], isError: true)
+            let path: String
+            switch InputValidation.logicProjectPath(params, mustExist: false) {
+            case .success(let value):
+                path = value
+            case .failure(let message):
+                return CallTool.Result(content: [.text(message)], isError: true)
             }
             let result = await router.route(
                 operation: "project.save_as",

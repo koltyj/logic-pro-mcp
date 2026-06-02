@@ -91,7 +91,7 @@ actor AppleScriptChannel: Channel {
     }
 
     private func openProjectScript(path: String) -> String {
-        let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
+        let escaped = escapeAppleScriptString(path)
         return """
         tell application "Logic Pro"
             activate
@@ -136,6 +136,15 @@ actor AppleScriptChannel: Channel {
     // MARK: - Helpers
 
     private func escapeJSON(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\t", with: "\\t")
+    }
+
+    private func escapeAppleScriptString(_ string: String) -> String {
         string
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
