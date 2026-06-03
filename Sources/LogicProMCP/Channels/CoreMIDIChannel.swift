@@ -165,7 +165,11 @@ actor CoreMIDIChannel: Channel {
             guard let hexString = params["bytes"] else {
                 return .error("send_sysex requires 'bytes' (hex string, e.g. 'F0 7F 7F 06 02 F7')")
             }
-            let bytes = hexString.split(separator: " ").compactMap { UInt8($0, radix: 16) }
+            let tokens = hexString.split(separator: " ")
+            let bytes = tokens.compactMap { UInt8($0, radix: 16) }
+            guard bytes.count == tokens.count else {
+                return .error("SysEx contains invalid hex tokens")
+            }
             guard bytes.count <= 1024, bytes.first == 0xF0, bytes.last == 0xF7 else {
                 return .error("SysEx must be at most 1024 bytes and start with F0 and end with F7")
             }
