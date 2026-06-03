@@ -1,9 +1,16 @@
 import Foundation
 import MCP
 
-enum Validation<Success> {
-    case success(Success)
-    case failure(String)
+typealias Validation<T> = Result<T, String>
+
+extension Result where Failure == String {
+    /// Converts a validation failure into an MCP error result, or returns nil on success.
+    func callToolResult() -> CallTool.Result {
+        guard case .failure(let message) = self else {
+            preconditionFailure("callToolResult() called on a .success value")
+        }
+        return CallTool.Result(content: [.text(message)], isError: true)
+    }
 }
 
 enum InputValidation {
@@ -78,16 +85,36 @@ enum InputValidation {
     }
 
     static func midiChannel(_ params: [String: Value]) -> Validation<Int> {
-        switch int(params, keys: ["channel"], default: 1, range: 1...16, label: "channel") {
-        case .success(let channel):
-            return .success(channel - 1)
-        case .failure(let message):
-            return .failure(message)
+        int(params, keys: ["channel"], default: 1, range: 1...16, label: "channel").map { $0 - 1 }
+    }
+
+    /// Parses and validates a MIDI note list from either an array of ints or a comma-separated string.
+    /// Returns a validated comma-separated string of note values (0-127), 1-16 notes.
+    static func midiNotes(_ params: [String: Value]) -> Validation<String> {
+        let notes: [Int]
+        if let arr = params["notes"]?.arrayValue {
+            let parsed = arr.compactMap { $0.intValue }
+            guard !parsed.isEmpty, parsed.count == arr.count, parsed.count <= 16,
+                  parsed.allSatisfy({ (0...127).contains($0) }) else {
+                return .failure("notes must contain 1-16 MIDI notes between 0 and 127")
+            }
+            notes = parsed
+        } else {
+            let str = params["notes"]?.stringValue ?? ""
+            let parsed = str.split(separator: ",").compactMap {
+                Int(String($0).trimmingCharacters(in: .whitespaces))
+            }
+            guard !parsed.isEmpty, parsed.count <= 16,
+                  parsed.allSatisfy({ (0...127).contains($0) }) else {
+                return .failure("notes must contain 1-16 MIDI notes between 0 and 127")
+            }
+            notes = parsed
         }
+        return .success(notes.map(String.init).joined(separator: ","))
     }
 
     static func logicProjectPath(
-        _ params: [String: Value],
+
         mustExist: Bool,
         label: String = "path"
     ) -> Validation<String> {
