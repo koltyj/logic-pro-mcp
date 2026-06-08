@@ -78,12 +78,12 @@ actor AppleScriptChannel: Channel {
 
     private func newProjectScript() -> String {
         """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             activate
             delay 0.5
         end tell
         tell application "System Events"
-            tell process "Logic Pro"
+            tell process "\(ServerConfig.logicProProcessName)"
                 click menu item "New..." of menu "File" of menu bar 1
             end tell
         end tell
@@ -93,7 +93,7 @@ actor AppleScriptChannel: Channel {
     private func openProjectScript(path: String) -> String {
         let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
         return """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             activate
             open POSIX file "\(escaped)"
         end tell
@@ -111,7 +111,7 @@ actor AppleScriptChannel: Channel {
             saveClause = "saving yes"
         }
         return """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             close front document \(saveClause)
         end tell
         """
@@ -119,7 +119,7 @@ actor AppleScriptChannel: Channel {
 
     private func saveProjectScript() -> String {
         """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             save front document
         end tell
         """
@@ -127,7 +127,7 @@ actor AppleScriptChannel: Channel {
 
     private func transportScript(action: String) -> String {
         """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             \(action)
         end tell
         """
