@@ -188,14 +188,17 @@ actor MIDIEngine {
             Log.warn("MIDIEngine not running — dropping message", subsystem: "midi")
             return
         }
+        let sources = ([virtualSource] + additionalVirtualSources).filter { $0 != 0 }
         bytes.withUnsafeBufferPointer { buffer in
             guard let baseAddress = buffer.baseAddress else { return }
             var packetList = MIDIPacketList()
             var packet = MIDIPacketListInit(&packetList)
             packet = MIDIPacketListAdd(&packetList, MemoryLayout<MIDIPacketList>.size, packet, 0, bytes.count, baseAddress)
-            let status = MIDIReceived(virtualSource, &packetList)
-            if status != noErr {
-                Log.error("MIDIReceived failed with status \(status)", subsystem: "midi")
+            for source in sources {
+                let status = MIDIReceived(source, &packetList)
+                if status != noErr {
+                    Log.error("MIDIReceived failed with status \(status)", subsystem: "midi")
+                }
             }
         }
     }

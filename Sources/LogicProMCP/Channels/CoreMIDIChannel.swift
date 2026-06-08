@@ -98,10 +98,17 @@ actor CoreMIDIChannel: Channel {
         // MARK: - CC
 
         case "midi.send_chord":
-            let notes = params["notes"]?
-                .split(separator: ",")
-                .compactMap { UInt8($0.trimmingCharacters(in: .whitespaces)) }
-                ?? []
+            guard let notesParam = params["notes"] else {
+                return .error("send_chord requires 'notes' as comma-separated MIDI notes")
+            }
+            var notes: [UInt8] = []
+            for token in notesParam.split(separator: ",", omittingEmptySubsequences: false) {
+                let noteToken = token.trimmingCharacters(in: .whitespaces)
+                guard let note = UInt8(noteToken), note <= 127 else {
+                    return .error("send_chord requires valid MIDI note numbers; invalid token: '\(noteToken)'")
+                }
+                notes.append(note)
+            }
             guard !notes.isEmpty else {
                 return .error("send_chord requires 'notes' as comma-separated MIDI notes")
             }
@@ -170,7 +177,13 @@ actor CoreMIDIChannel: Channel {
             guard let hexString = params["bytes"] ?? params["data"] else {
                 return .error("send_sysex requires 'bytes' or 'data' (hex string, e.g. 'F0 7F 7F 06 02 F7')")
             }
-            let bytes = hexString.split(separator: " ").compactMap { UInt8($0, radix: 16) }
+            var bytes: [UInt8] = []
+            for token in hexString.split(whereSeparator: \.isWhitespace) {
+                guard let byte = UInt8(token, radix: 16) else {
+                    return .error("Malformed SysEx: invalid hex token '\(token)'")
+                }
+                bytes.append(byte)
+            }
             guard bytes.first == 0xF0, bytes.last == 0xF7 else {
                 return .error("SysEx must start with F0 and end with F7")
             }
@@ -214,9 +227,21 @@ actor CoreMIDIChannel: Channel {
         subframes: UInt8
     )? {
         if let time = params["time"] ?? params["position"] {
-            let parts = time.split(separator: ":").compactMap { UInt8($0) }
-            guard parts.count == 4 else { return nil }
-            return (parts[0], parts[1], parts[2], parts[3], params["subframes"].flatMap(UInt8.init) ?? 0)
+            let tokens = time.split(separator: ":", omittingEmptySubsequences: false)
+            guard tokens.count == 4 else { return nil }
+            var parts: [UInt8] = []
+            for token in tokens {
+                guard let value = UInt8(token) else { return nil }
+                parts.append(value)
+            }
+            guard let subframes = parseOptionalSubframes(params) else { return nil }
+            return validatedSMPTETime(
+                hours: parts[0],
+                minutes: parts[1],
+                seconds: parts[2],
+                frames: parts[3],
+                subframes: subframes
+            )
         }
 
         guard let hours = params["hours"].flatMap(UInt8.init),
@@ -225,6 +250,41 @@ actor CoreMIDIChannel: Channel {
               let frames = params["frames"].flatMap(UInt8.init) else {
             return nil
         }
-        return (hours, minutes, seconds, frames, params["subframes"].flatMap(UInt8.init) ?? 0)
+        guard let subframes = parseOptionalSubframes(params) else { return nil }
+        return validatedSMPTETime(
+            hours: hours,
+            minutes: minutes,
+            seconds: seconds,
+            frames: frames,
+            subframes: subframes
+        )
+    }
+
+    private static func parseOptionalSubframes(_ params: [String: String]) -> UInt8? {
+        guard let rawSubframes = params["subframes"] else { return 0 }
+        return UInt8(rawSubframes)
+    }
+
+    private static func validatedSMPTETime(
+        hours: UInt8,
+        minutes: UInt8,
+        seconds: UInt8,
+        frames: UInt8,
+        subframes: UInt8
+    ) -> (
+        hours: UInt8,
+        minutes: UInt8,
+        seconds: UInt8,
+        frames: UInt8,
+        subframes: UInt8
+    )? {
+        guard hours <= 23,
+              minutes <= 59,
+              seconds <= 59,
+              frames <= 59,
+              subframes <= 99 else {
+            return nil
+        }
+        return (hours, minutes, seconds, frames, subframes)
     }
 }
