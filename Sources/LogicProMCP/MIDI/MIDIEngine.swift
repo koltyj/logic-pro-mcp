@@ -7,6 +7,7 @@ actor MIDIEngine {
     private var client: MIDIClientRef = 0
     private var virtualSource: MIDIEndpointRef = 0
     private var virtualDestination: MIDIEndpointRef = 0
+    private var additionalVirtualPorts: [(source: MIDIEndpointRef, destination: MIDIEndpointRef)] = []
     private var isRunning = false
 
     /// Stream of inbound MIDI packets from Logic Pro via the virtual destination.
@@ -65,9 +66,14 @@ actor MIDIEngine {
     /// Tear down all CoreMIDI resources.
     func stop() {
         guard isRunning else { return }
+        for port in additionalVirtualPorts {
+            if port.source != 0 { MIDIEndpointDispose(port.source) }
+            if port.destination != 0 { MIDIEndpointDispose(port.destination) }
+        }
         if virtualSource != 0 { MIDIEndpointDispose(virtualSource) }
         if virtualDestination != 0 { MIDIEndpointDispose(virtualDestination) }
         if client != 0 { MIDIClientDispose(client) }
+        additionalVirtualPorts.removeAll()
         virtualSource = 0
         virtualDestination = 0
         client = 0
@@ -77,6 +83,38 @@ actor MIDIEngine {
     }
 
     var isActive: Bool { isRunning && client != 0 }
+
+    // MARK: - Virtual Ports
+
+    /// Create an additional virtual source/destination pair.
+    func createVirtualPort(name: String) throws {
+        if !isRunning {
+            try start()
+        }
+
+        var source: MIDIEndpointRef = 0
+        var destination: MIDIEndpointRef = 0
+
+        let sourceName = "\(name)-Out" as CFString
+        var status = MIDISourceCreate(client, sourceName, &source)
+        guard status == noErr else {
+            throw MIDIEngineError.sourceCreationFailed(status)
+        }
+
+        let destinationName = "\(name)-In" as CFString
+        let continuation = self.inboundContinuation
+        status = MIDIDestinationCreateWithBlock(client, destinationName, &destination) { packetList, _ in
+            let packets = packetList.pointee
+            MIDIFeedback.parse(packetList: packets, into: continuation)
+        }
+        guard status == noErr else {
+            if source != 0 { MIDIEndpointDispose(source) }
+            throw MIDIEngineError.destinationCreationFailed(status)
+        }
+
+        additionalVirtualPorts.append((source: source, destination: destination))
+        Log.info("Virtual MIDI port created — source: \(name)-Out, sink: \(name)-In", subsystem: "midi")
+    }
 
     // MARK: - Send: Notes
 
