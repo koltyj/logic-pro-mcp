@@ -77,16 +77,30 @@ actor CoreMIDIChannel: Channel {
             return .success("Note \(note) on ch \(channel) vel \(velocity) dur \(durationMs)ms")
 
         case "midi.send_chord":
-            // Parse comma-separated notes
+            // Parse comma-separated notes. Every token must parse and be in
+            // range -- silently dropping bad tokens would play a different
+            // chord than the caller asked for, and out-of-range values would
+            // otherwise be masked to unrelated notes by MIDIEngine.
             guard let notesStr = params["notes"], !notesStr.isEmpty else {
                 return .error("send_chord requires 'notes' (comma-separated MIDI note numbers)")
             }
-            let chordNotes = notesStr.split(separator: ",").compactMap { UInt8($0.trimmingCharacters(in: .whitespaces)) }
-            guard !chordNotes.isEmpty else {
-                return .error("send_chord: no valid note numbers in '\(notesStr)'")
+            var chordNotes: [UInt8] = []
+            for token in notesStr.split(separator: ",") {
+                let trimmed = token.trimmingCharacters(in: .whitespaces)
+                guard let note = UInt8(trimmed), note <= 127 else {
+                    return .error("send_chord: invalid note '\(trimmed)' -- each note must be 0-127")
+                }
+                chordNotes.append(note)
             }
-            let chordChannel = params["channel"].flatMap(UInt8.init) ?? 0
-            let chordVelocity = params["velocity"].flatMap(UInt8.init) ?? 100
+            guard !chordNotes.isEmpty else {
+                return .error("send_chord: no note numbers in '\(notesStr)'")
+            }
+            guard let chordChannel = Self.parseChannel(params["channel"], default: 0) else {
+                return .error("send_chord: 'channel' must be 0-15")
+            }
+            guard let chordVelocity = Self.parse7Bit(params["velocity"], default: 100) else {
+                return .error("send_chord: 'velocity' must be 0-127")
+            }
             let chordDurationMs = params["duration_ms"].flatMap(UInt64.init) ?? 500
             // All notes on simultaneously
             for n in chordNotes {
@@ -106,89 +120,77 @@ actor CoreMIDIChannel: Channel {
                 return .error("send_sequence requires 'events' (JSON array of timed events)")
             }
             guard let eventsData = eventsJSON.data(using: .utf8),
-                  let events = try? JSONSerialization.jsonObject(with: eventsData) as? [[String: Any]] else {
+                  let rawEvents = try? JSONSerialization.jsonObject(with: eventsData) as? [[String: Any]] else {
                 return .error("send_sequence: 'events' must be a valid JSON array")
             }
-            guard !events.isEmpty else {
+            guard !rawEvents.isEmpty else {
                 return .error("send_sequence: events array is empty")
             }
-
-            let seqChannel = params["channel"].flatMap(UInt8.init) ?? 0
-            let eventCount = events.count
-
-            // Estimate total duration from events for the response message
-            var estimatedDurationMs: UInt64 = 0
-            for event in events {
-                let timeMs = (event["time_ms"] as? Int).map(UInt64.init) ?? 0
-                let dur = (event["duration_ms"] as? Int).map(UInt64.init) ?? 0
-                let end = timeMs + dur
-                if end > estimatedDurationMs { estimatedDurationMs = end }
+            guard let seqChannel = Self.parseChannel(params["channel"], default: 0) else {
+                return .error("send_sequence: 'channel' must be 0-15")
             }
 
-            // Fire and forget -- play sequence in detached task
+            // Validate every event up front, so a bad payload is rejected here
+            // instead of being coerced (or trapping on UInt8 conversion, which
+            // would kill the whole server) mid-playback in the detached task.
+            var events: [SequenceEvent] = []
+            for (index, raw) in rawEvents.enumerated() {
+                do {
+                    events.append(try SequenceEvent(raw, defaultChannel: seqChannel))
+                } catch let error as SequenceEventError {
+                    return .error("send_sequence: event \(index): \(error.message)")
+                } catch {
+                    return .error("send_sequence: event \(index): \(error)")
+                }
+            }
+
+            // Assign each event an absolute start on one timeline. Events keep
+            // their submitted order for equal explicit times (stable sort);
+            // events without time_ms play sequentially from the running cursor,
+            // preserving duration/rest-driven sequencing.
+            let scheduled = Self.schedule(events)
+            let eventCount = scheduled.count
+            let estimatedDurationMs = scheduled.map { $0.event.endOffset(from: $0.startMs) }.max() ?? 0
+
+            // Fire and forget -- play sequence in detached task. Note starts
+            // are slept-to against one monotonic origin and note-offs are
+            // dispatched independently, so a long duration never delays the
+            // next event's start.
             let engineRef = self.engine
             Task.detached {
-                let sorted = events.sorted {
-                    let a = ($0["time_ms"] as? Int).map(UInt64.init) ?? 0
-                    let b = ($1["time_ms"] as? Int).map(UInt64.init) ?? 0
-                    return a < b
-                }
-                var lastTimeMs: UInt64 = 0
-
-                for event in sorted {
-                    let eventType = event["type"] as? String ?? "note"
-                    let timeMs = (event["time_ms"] as? Int).map(UInt64.init) ?? 0
-
-                    if timeMs > lastTimeMs {
-                        let delta = timeMs - lastTimeMs
-                        try? await Task.sleep(nanoseconds: delta * 1_000_000)
-                    }
-                    lastTimeMs = timeMs
-
-                    let ch = (event["channel"] as? Int).map(UInt8.init) ?? seqChannel
-
-                    switch eventType {
-                    case "note":
-                        let note = UInt8(event["note"] as? Int ?? 60)
-                        let vel = UInt8(event["velocity"] as? Int ?? 100)
-                        let dur = UInt64(event["duration_ms"] as? Int ?? 250)
+                let origin = ContinuousClock.now
+                for (event, startMs) in scheduled {
+                    try? await Task.sleep(until: origin + .milliseconds(Int64(startMs)), clock: .continuous)
+                    switch event {
+                    case .note(_, let ch, let note, let vel, let dur):
                         await engineRef.sendNoteOn(channel: ch, note: note, velocity: vel)
-                        try? await Task.sleep(nanoseconds: dur * 1_000_000)
-                        await engineRef.sendNoteOff(channel: ch, note: note)
-                        lastTimeMs += dur
-
-                    case "chord":
-                        let notes: [Int] = event["notes"] as? [Int] ?? []
-                        let vel = UInt8(event["velocity"] as? Int ?? 100)
-                        let dur = UInt64(event["duration_ms"] as? Int ?? 500)
-                        for n in notes {
-                            await engineRef.sendNoteOn(channel: ch, note: UInt8(n), velocity: vel)
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(Int64(dur)))
+                            await engineRef.sendNoteOff(channel: ch, note: note)
                         }
-                        try? await Task.sleep(nanoseconds: dur * 1_000_000)
+
+                    case .chord(_, let ch, let notes, let vel, let dur):
                         for n in notes {
-                            await engineRef.sendNoteOff(channel: ch, note: UInt8(n))
+                            await engineRef.sendNoteOn(channel: ch, note: n, velocity: vel)
                         }
-                        lastTimeMs += dur
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(Int64(dur)))
+                            for n in notes {
+                                await engineRef.sendNoteOff(channel: ch, note: n)
+                            }
+                        }
 
-                    case "rest":
-                        let dur = UInt64(event["duration_ms"] as? Int ?? 250)
-                        try? await Task.sleep(nanoseconds: dur * 1_000_000)
-                        lastTimeMs += dur
+                    case .rest:
+                        break  // rests only occupy the timeline; scheduling already accounted for them
 
-                    case "cc":
-                        let controller = UInt8(event["controller"] as? Int ?? 0)
-                        let value = UInt8(event["value"] as? Int ?? 0)
+                    case .cc(_, let ch, let controller, let value):
                         await engineRef.sendCC(channel: ch, controller: controller, value: value)
 
-                    case "program_change":
-                        let program = UInt8(event["program"] as? Int ?? 0)
+                    case .programChange(_, let ch, let program):
                         await engineRef.sendProgramChange(channel: ch, program: program)
-
-                    default:
-                        Log.warn("send_sequence: unknown event type '\(eventType)', skipping", subsystem: "midi")
                     }
                 }
-                Log.info("Sequence playback complete: \(sorted.count) events over \(lastTimeMs)ms", subsystem: "midi")
+                Log.info("Sequence playback dispatched: \(scheduled.count) events over ~\(estimatedDurationMs)ms", subsystem: "midi")
             }
 
             return .success("Sequence started: \(eventCount) events, ~\(estimatedDurationMs)ms duration (playing in background)")
@@ -277,4 +279,178 @@ actor CoreMIDIChannel: Channel {
             return .unavailable("CoreMIDI client not initialized")
         }
     }
+}
+
+// MARK: - Parameter validation helpers
+
+extension CoreMIDIChannel {
+    /// Parse an optional string parameter as a MIDI channel (0-15).
+    /// Returns the default when absent, nil when present but invalid --
+    /// out-of-range channels must be rejected, not masked by MIDIEngine.
+    static func parseChannel(_ raw: String?, default def: UInt8) -> UInt8? {
+        guard let raw else { return def }
+        guard let value = UInt8(raw), value <= 15 else { return nil }
+        return value
+    }
+
+    /// Parse an optional string parameter as a 7-bit MIDI value (0-127).
+    static func parse7Bit(_ raw: String?, default def: UInt8) -> UInt8? {
+        guard let raw else { return def }
+        guard let value = UInt8(raw), value <= 127 else { return nil }
+        return value
+    }
+
+    /// Assign every event an absolute start time (ms) on one timeline.
+    /// Events are stably ordered by explicit time_ms (submitted order breaks
+    /// ties, so purely sequential input keeps its order). An event without
+    /// time_ms starts at the running cursor; note/chord/rest advance the
+    /// cursor by their duration, cc/program_change do not.
+    static func schedule(_ events: [SequenceEvent]) -> [(event: SequenceEvent, startMs: UInt64)] {
+        let ordered = events.enumerated()
+            .sorted { ($0.element.timeMs ?? 0, $0.offset) < ($1.element.timeMs ?? 0, $1.offset) }
+            .map(\.element)
+
+        var cursor: UInt64 = 0
+        var scheduled: [(event: SequenceEvent, startMs: UInt64)] = []
+        for event in ordered {
+            let start = event.timeMs ?? cursor
+            scheduled.append((event, start))
+            cursor = event.advancesTimeline ? start + event.durationMs : max(cursor, start)
+        }
+        return scheduled
+    }
+}
+
+// MARK: - Sequence events
+
+/// A fully validated send_sequence event. All range checks happen in the
+/// parser so the playback task never performs a trapping integer conversion.
+enum SequenceEvent: Sendable {
+    case note(timeMs: UInt64?, channel: UInt8, note: UInt8, velocity: UInt8, durationMs: UInt64)
+    case chord(timeMs: UInt64?, channel: UInt8, notes: [UInt8], velocity: UInt8, durationMs: UInt64)
+    case rest(timeMs: UInt64?, durationMs: UInt64)
+    case cc(timeMs: UInt64?, channel: UInt8, controller: UInt8, value: UInt8)
+    case programChange(timeMs: UInt64?, channel: UInt8, program: UInt8)
+
+    var timeMs: UInt64? {
+        switch self {
+        case .note(let t, _, _, _, _), .chord(let t, _, _, _, _), .rest(let t, _),
+             .cc(let t, _, _, _), .programChange(let t, _, _):
+            return t
+        }
+    }
+
+    var durationMs: UInt64 {
+        switch self {
+        case .note(_, _, _, _, let d), .chord(_, _, _, _, let d), .rest(_, let d):
+            return d
+        case .cc, .programChange:
+            return 0
+        }
+    }
+
+    /// Whether the event occupies time on the sequence timeline.
+    var advancesTimeline: Bool {
+        switch self {
+        case .note, .chord, .rest: return true
+        case .cc, .programChange: return false
+        }
+    }
+
+    /// Timeline position at which this event is finished, given its start.
+    func endOffset(from startMs: UInt64) -> UInt64 {
+        startMs + durationMs
+    }
+
+    init(_ raw: [String: Any], defaultChannel: UInt8) throws {
+        let type = raw["type"] as? String ?? "note"
+        let timeMs = try Self.optionalUInt64(raw, "time_ms")
+        let channel = try Self.bounded(raw, "channel", max: 15, default: defaultChannel)
+
+        switch type {
+        case "note":
+            guard raw["note"] != nil else {
+                throw SequenceEventError("'note' is required (0-127)")
+            }
+            self = .note(
+                timeMs: timeMs,
+                channel: channel,
+                note: try Self.bounded(raw, "note", max: 127, default: 0),
+                velocity: try Self.bounded(raw, "velocity", max: 127, default: 100),
+                durationMs: try Self.optionalUInt64(raw, "duration_ms") ?? 250
+            )
+
+        case "chord":
+            guard let rawNotes = raw["notes"] as? [Any], !rawNotes.isEmpty else {
+                throw SequenceEventError("'notes' is required (non-empty array of 0-127)")
+            }
+            var notes: [UInt8] = []
+            for member in rawNotes {
+                guard let n = member as? Int, (0...127).contains(n) else {
+                    throw SequenceEventError("'notes' contains invalid entry '\(member)' -- each note must be 0-127")
+                }
+                notes.append(UInt8(n))
+            }
+            self = .chord(
+                timeMs: timeMs,
+                channel: channel,
+                notes: notes,
+                velocity: try Self.bounded(raw, "velocity", max: 127, default: 100),
+                durationMs: try Self.optionalUInt64(raw, "duration_ms") ?? 500
+            )
+
+        case "rest":
+            self = .rest(
+                timeMs: timeMs,
+                durationMs: try Self.optionalUInt64(raw, "duration_ms") ?? 250
+            )
+
+        case "cc":
+            guard raw["controller"] != nil, raw["value"] != nil else {
+                throw SequenceEventError("'controller' and 'value' are required (0-127)")
+            }
+            self = .cc(
+                timeMs: timeMs,
+                channel: channel,
+                controller: try Self.bounded(raw, "controller", max: 127, default: 0),
+                value: try Self.bounded(raw, "value", max: 127, default: 0)
+            )
+
+        case "program_change":
+            guard raw["program"] != nil else {
+                throw SequenceEventError("'program' is required (0-127)")
+            }
+            self = .programChange(
+                timeMs: timeMs,
+                channel: channel,
+                program: try Self.bounded(raw, "program", max: 127, default: 0)
+            )
+
+        default:
+            throw SequenceEventError("unknown event type '\(type)' -- supported: note, chord, rest, cc, program_change")
+        }
+    }
+
+    /// Read an optional integer field, requiring 0...max when present.
+    private static func bounded(_ raw: [String: Any], _ key: String, max: Int, default def: UInt8) throws -> UInt8 {
+        guard let value = raw[key] else { return def }
+        guard let n = value as? Int, (0...max).contains(n) else {
+            throw SequenceEventError("'\(key)' must be an integer 0-\(max), got '\(value)'")
+        }
+        return UInt8(n)
+    }
+
+    /// Read an optional non-negative integer field as milliseconds.
+    private static func optionalUInt64(_ raw: [String: Any], _ key: String) throws -> UInt64? {
+        guard let value = raw[key] else { return nil }
+        guard let n = value as? Int, n >= 0 else {
+            throw SequenceEventError("'\(key)' must be a non-negative integer, got '\(value)'")
+        }
+        return UInt64(n)
+    }
+}
+
+struct SequenceEventError: Error {
+    let message: String
+    init(_ message: String) { self.message = message }
 }

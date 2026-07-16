@@ -120,7 +120,16 @@ enum AXValueExtractors {
     static func extractTransportState(from transport: AXUIElement) -> TransportState {
         var state = TransportState()
 
-        // Logic Pro 12: transport toggles are AXCheckBox with value 0/1
+        // Logic Pro 12: transport toggles are AXCheckBox with value 0/1.
+        // Track which controls the checkbox pass resolved, so the legacy
+        // button fallback fills in only the gaps -- mixed AX trees exist
+        // (checkbox Play alongside button Record/Cycle/Metronome), and a
+        // button must never overwrite a checkbox-resolved state.
+        var resolvedPlay = false
+        var resolvedRecord = false
+        var resolvedCycle = false
+        var resolvedMetronome = false
+
         let checkboxes = AXHelpers.findAllDescendants(of: transport, role: kAXCheckBoxRole, maxDepth: 4)
         for cb in checkboxes {
             let desc = AXHelpers.getDescription(cb) ?? AXHelpers.getTitle(cb) ?? ""
@@ -129,27 +138,32 @@ enum AXValueExtractors {
 
             if descLower == "play" {
                 state.isPlaying = pressed
+                resolvedPlay = true
             } else if descLower == "record" {
                 state.isRecording = pressed
+                resolvedRecord = true
             } else if descLower == "cycle" {
                 state.isCycleEnabled = pressed
+                resolvedCycle = true
             } else if descLower.contains("metronome") || descLower.contains("click") {
                 state.isMetronomeEnabled = pressed
+                resolvedMetronome = true
             }
         }
 
-        // Legacy fallback: some versions use AXButton
-        if !checkboxes.contains(where: { (AXHelpers.getDescription($0) ?? "").lowercased() == "play" }) {
+        // Legacy fallback: some versions use AXButton. Consult buttons only
+        // for controls the checkbox pass left unresolved.
+        if !(resolvedPlay && resolvedRecord && resolvedCycle && resolvedMetronome) {
             let buttons = AXHelpers.findAllDescendants(of: transport, role: kAXButtonRole, maxDepth: 4)
             for button in buttons {
                 let desc = AXHelpers.getDescription(button) ?? AXHelpers.getTitle(button) ?? ""
                 let pressed = extractButtonState(button) ?? false
                 let descLower = desc.lowercased()
 
-                if descLower.contains("play") { state.isPlaying = pressed }
-                else if descLower.contains("record") && !descLower.contains("arm") { state.isRecording = pressed }
-                else if descLower.contains("cycle") || descLower.contains("loop") { state.isCycleEnabled = pressed }
-                else if descLower.contains("metronome") || descLower.contains("click") { state.isMetronomeEnabled = pressed }
+                if !resolvedPlay, descLower.contains("play") { state.isPlaying = pressed }
+                else if !resolvedRecord, descLower.contains("record") && !descLower.contains("arm") { state.isRecording = pressed }
+                else if !resolvedCycle, descLower.contains("cycle") || descLower.contains("loop") { state.isCycleEnabled = pressed }
+                else if !resolvedMetronome, descLower.contains("metronome") || descLower.contains("click") { state.isMetronomeEnabled = pressed }
             }
         }
 

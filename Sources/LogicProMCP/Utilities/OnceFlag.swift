@@ -4,15 +4,14 @@ import os
 /// Thread-safe one-shot flag for guarding CheckedContinuation resumption.
 /// `tryConsume()` returns `true` exactly once, regardless of how many
 /// threads call it concurrently.
-final class OnceFlag: @unchecked Sendable {
-    private var _consumed = false
-    private let _lock = OSAllocatedUnfairLock()
+final class OnceFlag: Sendable {
+    private let _consumed = OSAllocatedUnfairLock(initialState: false)
 
     func tryConsume() -> Bool {
-        _lock.lock()
-        defer { _lock.unlock() }
-        if _consumed { return false }
-        _consumed = true
-        return true
+        _consumed.withLock { consumed in
+            if consumed { return false }
+            consumed = true
+            return true
+        }
     }
 }

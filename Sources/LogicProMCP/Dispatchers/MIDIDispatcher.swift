@@ -12,7 +12,13 @@ struct MIDIDispatcher {
             Params by command: \
             send_note -> { note: Int, velocity: Int, channel: Int, duration_ms: Int }; \
             send_chord -> { notes: [Int], velocity: Int, channel: Int, duration_ms: Int }; \
-            send_sequence -> { events: [{type, note/notes, velocity, channel, duration_ms, time_ms}], channel: Int }; \
+            send_sequence -> { events: [...], channel: Int } where each event is one of \
+            {type:"note", note: Int, velocity: Int?, channel: Int?, duration_ms: Int?, time_ms: Int?}, \
+            {type:"chord", notes: [Int], velocity: Int?, channel: Int?, duration_ms: Int?, time_ms: Int?}, \
+            {type:"rest", duration_ms: Int?, time_ms: Int?}, \
+            {type:"cc", controller: Int, value: Int, channel: Int?, time_ms: Int?}, \
+            {type:"program_change", program: Int, channel: Int?, time_ms: Int?} \
+            (time_ms = absolute start; events without time_ms play sequentially); \
             send_cc -> { controller: Int, value: Int, channel: Int }; \
             send_program_change -> { program: Int, channel: Int }; \
             send_pitch_bend -> { value: Int, channel: Int } (-8192 to 8191); \
@@ -83,36 +89,63 @@ struct MIDIDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "send_sequence":
-            // Accept events as a JSON array (already a Value array from MCP)
+            // Accept events as a JSON array (already a Value array from MCP).
+            // Reject anything that can't be represented instead of silently
+            // dropping it -- a mixed-validity request must not report success
+            // while playing fewer or altered events than submitted.
             let eventsJSON: String
             if let arr = params["events"]?.arrayValue {
-                // Convert MCP Value array back to JSON string for CoreMIDIChannel
                 var jsonEvents: [[String: Any]] = []
-                for item in arr {
-                    // Each item should be an object -- extract fields
-                    if case .object(let obj) = item {
-                        var dict: [String: Any] = [:]
-                        for (k, v) in obj {
-                            if let i = v.intValue { dict[k] = i }
-                            else if let d = v.doubleValue { dict[k] = Int(d) }
-                            else if let s = v.stringValue { dict[k] = s }
-                            else if let a = v.arrayValue {
-                                dict[k] = a.compactMap { $0.intValue ?? $0.doubleValue.map(Int.init) }
-                            }
-                        }
-                        jsonEvents.append(dict)
+                for (index, item) in arr.enumerated() {
+                    guard case .object(let obj) = item else {
+                        return CallTool.Result(
+                            content: [.text("send_sequence: event \(index) is not an object")],
+                            isError: true
+                        )
                     }
+                    var dict: [String: Any] = [:]
+                    for (k, v) in obj {
+                        if let i = v.intValue { dict[k] = i }
+                        else if let d = v.doubleValue { dict[k] = Int(d) }
+                        else if let s = v.stringValue { dict[k] = s }
+                        else if let a = v.arrayValue {
+                            var members: [Int] = []
+                            for (memberIndex, member) in a.enumerated() {
+                                if let i = member.intValue { members.append(i) }
+                                else if let d = member.doubleValue { members.append(Int(d)) }
+                                else {
+                                    return CallTool.Result(
+                                        content: [.text("send_sequence: event \(index) field '\(k)'[\(memberIndex)] is not a number")],
+                                        isError: true
+                                    )
+                                }
+                            }
+                            dict[k] = members
+                        }
+                        else {
+                            return CallTool.Result(
+                                content: [.text("send_sequence: event \(index) field '\(k)' has an unsupported type")],
+                                isError: true
+                            )
+                        }
+                    }
+                    jsonEvents.append(dict)
                 }
-                if let data = try? JSONSerialization.data(withJSONObject: jsonEvents),
-                   let str = String(data: data, encoding: .utf8) {
-                    eventsJSON = str
-                } else {
-                    eventsJSON = "[]"
+                guard let data = try? JSONSerialization.data(withJSONObject: jsonEvents),
+                      let str = String(data: data, encoding: .utf8) else {
+                    return CallTool.Result(
+                        content: [.text("send_sequence: failed to encode events")],
+                        isError: true
+                    )
                 }
+                eventsJSON = str
             } else if let str = params["events"]?.stringValue {
                 eventsJSON = str
             } else {
-                eventsJSON = "[]"
+                return CallTool.Result(
+                    content: [.text("send_sequence requires 'events' (array of event objects, or a JSON string)")],
+                    isError: true
+                )
             }
             let seqChannel = params["channel"]?.intValue ?? 1
             let seqResult = await router.route(

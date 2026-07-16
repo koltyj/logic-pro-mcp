@@ -1,6 +1,5 @@
 import Foundation
 import Network
-import os
 
 /// Sends OSC messages to Logic Pro over UDP using Network.framework.
 actor OSCClient {
@@ -31,9 +30,11 @@ actor OSCClient {
                     Task { await self?.setReady(true) }
                     if guard_.tryConsume() { continuation.resume(returning: true) }
                 case .failed(let error):
+                    Task { await self?.setReady(false) }
                     Log.error("OSCClient connection failed: \(error)", subsystem: "osc")
                     if guard_.tryConsume() { continuation.resume(returning: false) }
                 case .cancelled:
+                    Task { await self?.setReady(false) }
                     Log.info("OSCClient connection cancelled", subsystem: "osc")
                     if guard_.tryConsume() { continuation.resume(returning: false) }
                 default:
@@ -45,6 +46,10 @@ actor OSCClient {
 
         if readyResult {
             self.connection = conn
+            // Set readiness synchronously: the Task dispatched by the state
+            // handler races with this method returning, and a caller's
+            // immediate send() must not see isReady == false.
+            self.isReady = true
             Log.info("OSCClient connected to \(host):\(port)", subsystem: "osc")
         } else {
             conn.cancel()
