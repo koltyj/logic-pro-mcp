@@ -8,7 +8,7 @@ let package = Package(
         .executable(name: "LogicProMCP", targets: ["LogicProMCP"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.10.0"),
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.1"),
     ],
     targets: [
         .executableTarget(

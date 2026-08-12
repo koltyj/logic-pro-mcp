@@ -75,9 +75,18 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_tempo":
-            let tempo = params["tempo"]?.doubleValue
-                ?? params["bpm"]?.doubleValue
-                ?? 120.0
+            let tempo: Double
+            switch InputValidation.double(
+                params,
+                keys: ["tempo", "bpm"],
+                default: 120,
+                range: 20...999,
+                label: "tempo"
+            ) {
+            case .success(let value): tempo = value
+            case .failure(let message):
+                return CallTool.Result(content: [.text(message)], isError: true)
+            }
             let result = await router.route(
                 operation: "transport.set_tempo",
                 params: ["bpm": String(tempo)]
@@ -85,7 +94,13 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "goto_position":
-            if let bar = params["bar"]?.intValue {
+            if params["bar"] != nil {
+                let bar: Int
+                switch InputValidation.int(params, keys: ["bar"], range: 1...999_999, label: "bar") {
+                case .success(let value): bar = value
+                case .failure(let message):
+                    return CallTool.Result(content: [.text(message)], isError: true)
+                }
                 let result = await router.route(
                     operation: "transport.goto_position",
                     params: ["position": "\(bar).1.1.1"]
@@ -95,6 +110,12 @@ struct TransportDispatcher {
             let time = params["time"]?.stringValue
                 ?? params["position"]?.stringValue
                 ?? "1.1.1.1"
+            guard Self.isSafePosition(time) else {
+                return CallTool.Result(
+                    content: [.text("time/position must use digits separated by ':' or '.'")],
+                    isError: true
+                )
+            }
             let result = await router.route(
                 operation: "transport.goto_position",
                 params: ["position": time]
@@ -102,8 +123,21 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_cycle_range":
-            let start = params["start"]?.intValue ?? 1
-            let end = params["end"]?.intValue ?? 5
+            let start: Int
+            let end: Int
+            switch InputValidation.int(params, keys: ["start"], default: 1, range: 1...999_999, label: "start") {
+            case .success(let value): start = value
+            case .failure(let message):
+                return CallTool.Result(content: [.text(message)], isError: true)
+            }
+            switch InputValidation.int(params, keys: ["end"], default: 5, range: 1...999_999, label: "end") {
+            case .success(let value): end = value
+            case .failure(let message):
+                return CallTool.Result(content: [.text(message)], isError: true)
+            }
+            guard end >= start else {
+                return CallTool.Result(content: [.text("end must be greater than or equal to start")], isError: true)
+            }
             let result = await router.route(
                 operation: "transport.set_cycle_range",
                 params: ["start": "\(start).1.1.1", "end": "\(end).1.1.1"]
@@ -116,5 +150,13 @@ struct TransportDispatcher {
                 isError: true
             )
         }
+    }
+
+    private static func isSafePosition(_ value: String) -> Bool {
+        let allowed = CharacterSet(charactersIn: "0123456789:.")
+        return !value.isEmpty
+            && value.count <= 32
+            && value.rangeOfCharacter(from: allowed.inverted) == nil
+            && value.contains { $0 == "." || $0 == ":" }
     }
 }

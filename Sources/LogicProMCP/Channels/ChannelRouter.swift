@@ -105,7 +105,7 @@ actor ChannelRouter {
         "project.new":                [.appleScript],
         "project.open":               [.appleScript],
         "project.save":               [.cgEvent, .appleScript],
-        "project.save_as":            [.cgEvent],
+        "project.save_as":            [.appleScript],
         "project.close":              [.cgEvent, .appleScript],
         "project.get_info":           [.accessibility],
         "project.bounce":             [.cgEvent, .accessibility],

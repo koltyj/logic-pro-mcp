@@ -32,6 +32,12 @@ actor AppleScriptChannel: Channel {
         case "project.save":
             return await runScript(saveProjectScript())
 
+        case "project.save_as":
+            guard let path = params["path"] else {
+                return .error("Missing 'path' parameter for project.save_as")
+            }
+            return await runScript(saveProjectScript(path: path))
+
         // Transport fallbacks (AppleScript is last resort for these)
         case "transport.play":
             return await runScript(transportScript(action: "play"))
@@ -78,12 +84,12 @@ actor AppleScriptChannel: Channel {
 
     private func newProjectScript() -> String {
         """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             activate
             delay 0.5
         end tell
         tell application "System Events"
-            tell process "Logic Pro"
+            tell (\(ProcessUtils.logicProSystemEventsProcessTarget))
                 click menu item "New..." of menu "File" of menu bar 1
             end tell
         end tell
@@ -91,9 +97,9 @@ actor AppleScriptChannel: Channel {
     }
 
     private func openProjectScript(path: String) -> String {
-        let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
+        let escaped = escapeAppleScriptString(path)
         return """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             activate
             open POSIX file "\(escaped)"
         end tell
@@ -111,7 +117,7 @@ actor AppleScriptChannel: Channel {
             saveClause = "saving yes"
         }
         return """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             close front document \(saveClause)
         end tell
         """
@@ -119,15 +125,24 @@ actor AppleScriptChannel: Channel {
 
     private func saveProjectScript() -> String {
         """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             save front document
+        end tell
+        """
+    }
+
+    private func saveProjectScript(path: String) -> String {
+        let escaped = escapeAppleScriptString(path)
+        return """
+        tell \(ProcessUtils.logicProAppleScriptTarget)
+            save front document in POSIX file "\(escaped)"
         end tell
         """
     }
 
     private func transportScript(action: String) -> String {
         """
-        tell application "Logic Pro"
+        tell \(ProcessUtils.logicProAppleScriptTarget)
             \(action)
         end tell
         """
@@ -136,6 +151,15 @@ actor AppleScriptChannel: Channel {
     // MARK: - Helpers
 
     private func escapeJSON(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\t", with: "\\t")
+    }
+
+    private func escapeAppleScriptString(_ string: String) -> String {
         string
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")

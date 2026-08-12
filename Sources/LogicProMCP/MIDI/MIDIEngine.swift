@@ -7,6 +7,8 @@ actor MIDIEngine {
     private var client: MIDIClientRef = 0
     private var virtualSource: MIDIEndpointRef = 0
     private var virtualDestination: MIDIEndpointRef = 0
+    private var additionalVirtualSources: [MIDIEndpointRef] = []
+    private var additionalVirtualDestinations: [MIDIEndpointRef] = []
     private var isRunning = false
 
     /// Stream of inbound MIDI packets from Logic Pro via the virtual destination.
@@ -65,9 +67,17 @@ actor MIDIEngine {
     /// Tear down all CoreMIDI resources.
     func stop() {
         guard isRunning else { return }
+        for source in additionalVirtualSources where source != 0 {
+            MIDIEndpointDispose(source)
+        }
+        for destination in additionalVirtualDestinations where destination != 0 {
+            MIDIEndpointDispose(destination)
+        }
         if virtualSource != 0 { MIDIEndpointDispose(virtualSource) }
         if virtualDestination != 0 { MIDIEndpointDispose(virtualDestination) }
         if client != 0 { MIDIClientDispose(client) }
+        additionalVirtualSources.removeAll()
+        additionalVirtualDestinations.removeAll()
         virtualSource = 0
         virtualDestination = 0
         client = 0
@@ -77,6 +87,36 @@ actor MIDIEngine {
     }
 
     var isActive: Bool { isRunning && client != 0 }
+
+    /// Create an additional virtual source/destination pair.
+    func createVirtualPort(named name: String) throws {
+        if !isRunning {
+            try start()
+        }
+
+        var source: MIDIEndpointRef = 0
+        var destination: MIDIEndpointRef = 0
+        let sourceName = "\(name)-Out" as CFString
+        let destinationName = "\(name)-In" as CFString
+
+        var status = MIDISourceCreate(client, sourceName, &source)
+        guard status == noErr else {
+            throw MIDIEngineError.sourceCreationFailed(status)
+        }
+
+        let continuation = self.inboundContinuation
+        status = MIDIDestinationCreateWithBlock(client, destinationName, &destination) { packetList, _ in
+            let packets = packetList.pointee
+            MIDIFeedback.parse(packetList: packets, into: continuation)
+        }
+        guard status == noErr else {
+            MIDIEndpointDispose(source)
+            throw MIDIEngineError.destinationCreationFailed(status)
+        }
+
+        additionalVirtualSources.append(source)
+        additionalVirtualDestinations.append(destination)
+    }
 
     // MARK: - Send: Notes
 
@@ -148,14 +188,17 @@ actor MIDIEngine {
             Log.warn("MIDIEngine not running — dropping message", subsystem: "midi")
             return
         }
+        let sources = ([virtualSource] + additionalVirtualSources).filter { $0 != 0 }
         bytes.withUnsafeBufferPointer { buffer in
             guard let baseAddress = buffer.baseAddress else { return }
             var packetList = MIDIPacketList()
             var packet = MIDIPacketListInit(&packetList)
             packet = MIDIPacketListAdd(&packetList, MemoryLayout<MIDIPacketList>.size, packet, 0, bytes.count, baseAddress)
-            let status = MIDIReceived(virtualSource, &packetList)
-            if status != noErr {
-                Log.error("MIDIReceived failed with status \(status)", subsystem: "midi")
+            for source in sources {
+                let status = MIDIReceived(source, &packetList)
+                if status != noErr {
+                    Log.error("MIDIReceived failed with status \(status)", subsystem: "midi")
+                }
             }
         }
     }

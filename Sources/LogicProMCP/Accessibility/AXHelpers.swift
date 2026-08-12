@@ -69,13 +69,15 @@ enum AXHelpers {
         of element: AXUIElement,
         role: String? = nil,
         title: String? = nil,
-        identifier: String? = nil
+        identifier: String? = nil,
+        description: String? = nil
     ) -> AXUIElement? {
         let children = getChildren(element)
         for child in children {
             if let role, getRole(child) != role { continue }
             if let title, getTitle(child) != title { continue }
             if let identifier, getIdentifier(child) != identifier { continue }
+            if let description, getDescription(child) != description { continue }
             return child
         }
         return nil
@@ -88,6 +90,7 @@ enum AXHelpers {
         role: String? = nil,
         title: String? = nil,
         identifier: String? = nil,
+        description: String? = nil,
         maxDepth: Int = 10
     ) -> AXUIElement? {
         guard maxDepth > 0 else { return nil }
@@ -96,11 +99,12 @@ enum AXHelpers {
             let roleMatch = role == nil || getRole(child) == role
             let titleMatch = title == nil || getTitle(child) == title
             let idMatch = identifier == nil || getIdentifier(child) == identifier
-            if roleMatch && titleMatch && idMatch {
+            let descriptionMatch = description == nil || getDescription(child) == description
+            if roleMatch && titleMatch && idMatch && descriptionMatch {
                 return child
             }
             if let found = findDescendant(
-                of: child, role: role, title: title, identifier: identifier,
+                of: child, role: role, title: title, identifier: identifier, description: description,
                 maxDepth: maxDepth - 1
             ) {
                 return found

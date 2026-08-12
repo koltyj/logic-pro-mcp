@@ -54,6 +54,9 @@ enum AXValueExtractors {
         if let number = value as? NSNumber {
             return number.intValue != 0
         }
+        if let string = value as? String {
+            return string == "1" || string.lowercased() == "true"
+        }
         return nil
     }
 
@@ -87,10 +90,12 @@ enum AXValueExtractors {
     /// Read a track header and extract its basic state.
     static func extractTrackState(from header: AXUIElement, index: Int) -> TrackState {
         let name = extractTrackName(from: header)
-        let muted = extractTrackButtonState(from: header, prefix: "Mute") ?? false
-        let soloed = extractTrackButtonState(from: header, prefix: "Solo") ?? false
-        let armed = extractTrackButtonState(from: header, prefix: "Record") ?? false
-        let selected = extractSelectedState(header) ?? false
+        let muted = extractToggleState(from: header, description: "Mute") ?? false
+        let soloed = extractToggleState(from: header, description: "Solo") ?? false
+        let armed = extractToggleState(from: header, description: "Record Enable")
+            ?? extractToggleState(from: header, description: "Record")
+            ?? false
+        let selected = isTrackSelected(header)
         let trackType = inferTrackType(from: header)
 
         return TrackState(
@@ -111,40 +116,94 @@ enum AXValueExtractors {
     static func extractTransportState(from transport: AXUIElement) -> TransportState {
         var state = TransportState()
 
-        // Find and read transport button states
+        var resolvedPlay = false
+        var resolvedRecord = false
+        var resolvedCycle = false
+        var resolvedMetronome = false
+
+        let checkboxes = AXHelpers.findAllDescendants(of: transport, role: kAXCheckBoxRole, maxDepth: 4)
+        for checkbox in checkboxes {
+            let desc = AXHelpers.getDescription(checkbox) ?? AXHelpers.getTitle(checkbox) ?? ""
+            let pressed = extractCheckboxState(checkbox) ?? extractButtonState(checkbox) ?? false
+            let descLower = desc.lowercased()
+
+            if !resolvedPlay && descLower == "play" {
+                state.isPlaying = pressed
+                resolvedPlay = true
+            } else if !resolvedRecord && descLower == "record" {
+                state.isRecording = pressed
+                resolvedRecord = true
+            } else if !resolvedCycle && descLower == "cycle" {
+                state.isCycleEnabled = pressed
+                resolvedCycle = true
+            } else if !resolvedMetronome && (descLower.contains("metronome") || descLower.contains("click")) {
+                state.isMetronomeEnabled = pressed
+                resolvedMetronome = true
+            }
+        }
+
+        // Legacy fallback: resolve only controls absent from the Logic Pro 12 checkbox tree.
         let buttons = AXHelpers.findAllDescendants(of: transport, role: kAXButtonRole, maxDepth: 4)
         for button in buttons {
             let desc = AXHelpers.getDescription(button) ?? AXHelpers.getTitle(button) ?? ""
             let pressed = extractButtonState(button) ?? false
             let descLower = desc.lowercased()
 
-            if descLower.contains("play") {
+            if !resolvedPlay && descLower.contains("play") {
                 state.isPlaying = pressed
-            } else if descLower.contains("record") && !descLower.contains("arm") {
+                resolvedPlay = true
+            } else if !resolvedRecord && descLower.contains("record") && !descLower.contains("arm") {
                 state.isRecording = pressed
-            } else if descLower.contains("cycle") || descLower.contains("loop") {
+                resolvedRecord = true
+            } else if !resolvedCycle && (descLower.contains("cycle") || descLower.contains("loop")) {
                 state.isCycleEnabled = pressed
-            } else if descLower.contains("metronome") || descLower.contains("click") {
+                resolvedCycle = true
+            } else if !resolvedMetronome && (descLower.contains("metronome") || descLower.contains("click")) {
                 state.isMetronomeEnabled = pressed
+                resolvedMetronome = true
             }
         }
 
-        // Find text fields for tempo, position
+        let sliders = AXHelpers.findAllDescendants(of: transport, role: kAXSliderRole, maxDepth: 4)
+        var resolvedTempo = false
+        var resolvedPosition = false
+        var bar: Int?
+        var beat: Int?
+        var division: Int?
+        var tick: Int?
+        for slider in sliders {
+            guard let value = extractSliderValue(slider) else { continue }
+            switch AXHelpers.getDescription(slider)?.lowercased() {
+            case "tempo":
+                state.tempo = value
+                resolvedTempo = true
+            case "bar": bar = Int(value)
+            case "beat": beat = Int(value)
+            case "division": division = Int(value)
+            case "tick": tick = Int(value)
+            default: break
+            }
+        }
+        if let bar, let beat, let division, let tick {
+            state.position = "\(bar).\(beat).\(division).\(tick)"
+            resolvedPosition = true
+        }
+
+        // Legacy fallback: text-based tempo and position.
         let texts = AXHelpers.findAllDescendants(of: transport, role: kAXStaticTextRole, maxDepth: 4)
         for text in texts {
             guard let value = extractTextValue(text) else { continue }
             let desc = AXHelpers.getDescription(text) ?? ""
             let descLower = desc.lowercased()
 
-            if descLower.contains("tempo") || descLower.contains("bpm") {
+            if !resolvedTempo, descLower.contains("tempo") || descLower.contains("bpm") {
                 if let tempo = Double(value.replacingOccurrences(of: " BPM", with: "")) {
                     state.tempo = tempo
+                    resolvedTempo = true
                 }
-            } else if descLower.contains("position") || value.contains(".") && value.contains(":") == false {
-                // Bar.Beat.Division.Tick format
-                if value.filter({ $0 == "." }).count >= 2 {
-                    state.position = value
-                }
+            } else if !resolvedPosition, value.filter({ $0 == "." }).count >= 2 {
+                state.position = value
+                resolvedPosition = true
             } else if value.contains(":") {
                 // Time format HH:MM:SS
                 state.timePosition = value
@@ -157,29 +216,56 @@ enum AXValueExtractors {
 
     // MARK: - Private helpers
 
+    static func isTrackSelected(_ header: AXUIElement) -> Bool {
+        extractHasFocus(from: header) ?? extractSelectedState(header) ?? false
+    }
+
     private static func extractTrackName(from header: AXUIElement) -> String {
-        // Try static text first
+        if let field = AXHelpers.findDescendant(of: header, role: kAXTextFieldRole, maxDepth: 3) {
+            if let description = AXHelpers.getDescription(field), !description.isEmpty {
+                return description
+            }
+            if let name = extractTextValue(field), !name.isEmpty, name != "0" {
+                return name
+            }
+        }
+        // Legacy fallback: static text.
         if let text = AXHelpers.findDescendant(of: header, role: kAXStaticTextRole, maxDepth: 3),
            let name = extractTextValue(text), !name.isEmpty {
             return name
         }
-        // Try text field
-        if let field = AXHelpers.findDescendant(of: header, role: kAXTextFieldRole, maxDepth: 3),
-           let name = extractTextValue(field), !name.isEmpty {
-            return name
+        if let description = AXHelpers.getDescription(header),
+           let start = description.firstIndex(of: "\"") ?? description.firstIndex(of: "\u{201C}"),
+           let end = description.lastIndex(of: "\"") ?? description.lastIndex(of: "\u{201D}"),
+           start < end {
+            return String(description[description.index(after: start)..<end])
         }
         return AXHelpers.getTitle(header) ?? "Untitled"
     }
 
-    private static func extractTrackButtonState(from header: AXUIElement, prefix: String) -> Bool? {
+    private static func extractToggleState(from header: AXUIElement, description: String) -> Bool? {
+        if let checkbox = AXHelpers.findDescendant(
+            of: header, role: kAXCheckBoxRole, description: description, maxDepth: 4
+        ) {
+            return extractCheckboxState(checkbox) ?? extractButtonState(checkbox)
+        }
         let buttons = AXHelpers.findAllDescendants(of: header, role: kAXButtonRole, maxDepth: 4)
         for button in buttons {
             let desc = AXHelpers.getDescription(button) ?? AXHelpers.getTitle(button) ?? ""
-            if desc.hasPrefix(prefix) || desc.lowercased().contains(prefix.lowercased()) {
+            if desc.hasPrefix(description) || desc.lowercased().contains(description.lowercased()) {
                 return extractButtonState(button)
             }
         }
         return nil
+    }
+
+    private static func extractHasFocus(from header: AXUIElement) -> Bool? {
+        guard let focus = AXHelpers.findDescendant(
+            of: header, role: kAXRadioButtonRole, description: "Has Focus", maxDepth: 4
+        ) else {
+            return nil
+        }
+        return extractSelectedState(focus) ?? extractButtonState(focus)
     }
 
     private static func inferTrackType(from header: AXUIElement) -> TrackType {

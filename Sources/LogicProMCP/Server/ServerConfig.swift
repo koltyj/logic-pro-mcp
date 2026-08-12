@@ -42,6 +42,7 @@ struct ServerConfig: Sendable {
     static let channelHealthCheckTimeout: TimeInterval = 3.0
 
     // MARK: - Logic Pro
-    static let logicProBundleID = "com.apple.logic10"
+    static let logicProBundleIDs = ["com.apple.logic10", "com.apple.mobilelogic"]
+    static let logicProBundleID = logicProBundleIDs[0]
     static let logicProProcessName = "Logic Pro"
 }

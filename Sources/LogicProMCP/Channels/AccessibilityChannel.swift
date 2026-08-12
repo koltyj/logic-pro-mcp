@@ -196,7 +196,7 @@ actor AccessibilityChannel: Channel {
     private func getSelectedTrack() -> ChannelResult {
         let headers = AXLogicProElements.allTrackHeaders()
         for (index, header) in headers.enumerated() {
-            if AXValueExtractors.extractSelectedState(header) == true {
+            if AXValueExtractors.isTrackSelected(header) {
                 let track = AXValueExtractors.extractTrackState(from: header, index: index)
                 return encodeResult(track)
             }
