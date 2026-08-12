@@ -39,7 +39,7 @@ enum PermissionChecker {
             return false
         }
         let script = NSAppleScript(source: """
-            tell application "Logic Pro" to return name
+            tell \(ProcessUtils.logicProAppleScriptTarget) to return name
         """)
         var errorInfo: NSDictionary?
         _ = script?.executeAndReturnError(&errorInfo)

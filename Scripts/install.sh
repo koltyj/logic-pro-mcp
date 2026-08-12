@@ -25,20 +25,25 @@ if [[ -f "$PROJECT_DIR/Package.swift" ]]; then
         echo "ERROR: Build failed — binary not found"
         exit 1
     fi
-    sudo cp "$BUILT_BINARY" "$INSTALL_DIR/$BINARY_NAME"
+    sudo install -m 0755 "$BUILT_BINARY" "$INSTALL_DIR/$BINARY_NAME"
 else
     echo "Downloading latest release..."
     DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/$BINARY_NAME"
+    SUMS_URL="https://github.com/$REPO/releases/latest/download/SHA256SUMS.txt"
     TMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TMP_DIR"' EXIT
-    if ! curl -fSL --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/$BINARY_NAME"; then
+    if ! curl --proto '=https' --tlsv1.2 -fSL --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/$BINARY_NAME"; then
         echo "ERROR: Download failed. Check https://github.com/$REPO/releases"
         exit 1
     fi
-    sudo mv "$TMP_DIR/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
+    if ! curl --proto '=https' --tlsv1.2 -fsSL "$SUMS_URL" -o "$TMP_DIR/SHA256SUMS.txt"; then
+        echo "ERROR: Checksum download failed; refusing to install an unverified binary"
+        exit 1
+    fi
+    (cd "$TMP_DIR" && grep "  $BINARY_NAME$" SHA256SUMS.txt | shasum -a 256 -c -)
+    sudo install -m 0755 "$TMP_DIR/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
 fi
 
-sudo chmod +x "$INSTALL_DIR/$BINARY_NAME"
 echo "Installed to $INSTALL_DIR/$BINARY_NAME"
 
 # Check permissions

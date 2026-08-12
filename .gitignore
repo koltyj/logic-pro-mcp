@@ -1,9 +1,15 @@
 .DS_Store
 /.build
+/.omx
 /Packages
 xcuserdata/
 DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
 *.xcodeproj
-Package.resolved

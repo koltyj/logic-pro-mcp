@@ -45,7 +45,7 @@ actor CGEventChannel: Channel {
         "transport.fast_forward":     .key(124),        // Right arrow
         "transport.toggle_cycle":     .key(8),          // C
         "transport.toggle_metronome": .key(40),         // K
-        "transport.goto_position":    .key(47),         // / (opens Go To Position)
+        "transport.goto_position":    .key(44),         // / (opens Go To Position)
 
         // Editing
         "edit.undo":                  .cmd(6),          // Cmd+Z
@@ -105,6 +105,20 @@ actor CGEventChannel: Channel {
             return .error("Logic Pro is not running")
         }
 
+        if operation == "transport.goto_position" {
+            guard let position = params["position"] else {
+                return .error("Missing 'position' parameter")
+            }
+            guard postKeyEvent(keyCode: 44, flags: [], pid: pid) else {
+                return .error("Failed to open Go To Position")
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+            guard postText(position, pid: pid), postKeyEvent(keyCode: 36, flags: [], pid: pid) else {
+                return .error("Failed to enter Go To Position value")
+            }
+            return .success("{\"position\":\"\(position)\"}")
+        }
+
         guard let shortcut = Self.keyMap[operation] else {
             return .error("No keyboard shortcut mapped for: \(operation)")
         }
@@ -149,6 +163,22 @@ actor CGEventChannel: Channel {
         keyUp.postToPid(pid)
 
         Log.debug("Posted key \(keyCode) flags \(flags.rawValue) to PID \(pid)", subsystem: "cgEvent")
+        return true
+    }
+
+    private func postText(_ text: String, pid: pid_t) -> Bool {
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+            return false
+        }
+        let characters = Array(text.utf16)
+        characters.withUnsafeBufferPointer { buffer in
+            keyDown.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+            keyUp.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+        }
+        keyDown.postToPid(pid)
+        keyUp.postToPid(pid)
         return true
     }
 }

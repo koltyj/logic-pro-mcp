@@ -22,22 +22,34 @@ enum AXLogicProElements {
     /// Find the transport bar area (toolbar/group containing play, stop, record, etc.)
     static func getTransportBar() -> AXUIElement? {
         guard let window = mainWindow() else { return nil }
-        // Logic Pro's transport is typically an AXToolbar or AXGroup near the top
+        if let bar = AXHelpers.findChild(of: window, role: kAXGroupRole, description: "Control Bar") {
+            return bar
+        }
+        // Legacy fallback: Logic Pro's transport is typically an AXToolbar near the top.
         if let toolbar = AXHelpers.findChild(of: window, role: kAXToolbarRole) {
             return toolbar
         }
-        // Fallback: search for a group containing transport-like buttons
+        // Legacy fallback: a group with the old identifier.
         return AXHelpers.findDescendant(of: window, role: kAXGroupRole, identifier: "Transport")
     }
 
-    /// Find a specific transport button by its title or description.
+    /// Find a specific transport control by its title or description.
     static func findTransportButton(named name: String) -> AXUIElement? {
         guard let transport = getTransportBar() else { return nil }
-        // Try by title first
+        if let checkbox = AXHelpers.findDescendant(
+            of: transport, role: kAXCheckBoxRole, description: name, maxDepth: 4
+        ) {
+            return checkbox
+        }
+        if let checkbox = AXHelpers.findDescendant(
+            of: transport, role: kAXCheckBoxRole, title: name, maxDepth: 4
+        ) {
+            return checkbox
+        }
+        // Legacy fallback: AXButton.
         if let button = AXHelpers.findDescendant(of: transport, role: kAXButtonRole, title: name) {
             return button
         }
-        // Try by description (some buttons use AXDescription instead of AXTitle)
         let buttons = AXHelpers.findAllDescendants(of: transport, role: kAXButtonRole, maxDepth: 4)
         for button in buttons {
             if AXHelpers.getDescription(button) == name {
@@ -52,7 +64,12 @@ enum AXLogicProElements {
     /// Find the track header area containing individual track rows.
     static func getTrackHeaders() -> AXUIElement? {
         guard let window = mainWindow() else { return nil }
-        // Track headers are typically in a scrollable list/table area
+        if let area = AXHelpers.findDescendant(
+            of: window, role: kAXGroupRole, description: "Tracks header"
+        ) {
+            return area
+        }
+        // Legacy fallbacks for older Logic Pro versions.
         if let area = AXHelpers.findDescendant(of: window, role: kAXListRole, identifier: "Track Headers") {
             return area
         }
@@ -161,43 +178,49 @@ enum AXLogicProElements {
 
     // MARK: - Track Controls
 
-    /// Find the mute button on a track header.
+    /// Find the mute control on a track header.
     static func findTrackMuteButton(trackIndex: Int) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
-        return findButtonByDescriptionPrefix(in: header, prefix: "Mute")
+        return findToggleByDescription(in: header, description: "Mute")
             ?? AXHelpers.findDescendant(of: header, role: kAXButtonRole, title: "M")
     }
 
-    /// Find the solo button on a track header.
+    /// Find the solo control on a track header.
     static func findTrackSoloButton(trackIndex: Int) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
-        return findButtonByDescriptionPrefix(in: header, prefix: "Solo")
+        return findToggleByDescription(in: header, description: "Solo")
             ?? AXHelpers.findDescendant(of: header, role: kAXButtonRole, title: "S")
     }
 
-    /// Find the record-arm button on a track header.
+    /// Find the record-arm control on a track header.
     static func findTrackArmButton(trackIndex: Int) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
-        return findButtonByDescriptionPrefix(in: header, prefix: "Record")
+        return findToggleByDescription(in: header, description: "Record Enable")
+            ?? findToggleByDescription(in: header, description: "Record")
             ?? AXHelpers.findDescendant(of: header, role: kAXButtonRole, title: "R")
     }
 
     /// Find the track name text field on a header.
     static func findTrackNameField(trackIndex: Int) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
-        return AXHelpers.findDescendant(of: header, role: kAXStaticTextRole, maxDepth: 4)
-            ?? AXHelpers.findDescendant(of: header, role: kAXTextFieldRole, maxDepth: 4)
+        return AXHelpers.findDescendant(of: header, role: kAXTextFieldRole, maxDepth: 4)
+            ?? AXHelpers.findDescendant(of: header, role: kAXStaticTextRole, maxDepth: 4)
     }
 
     // MARK: - Helpers
 
-    private static func findButtonByDescriptionPrefix(
-        in element: AXUIElement, prefix: String
+    private static func findToggleByDescription(
+        in element: AXUIElement, description: String
     ) -> AXUIElement? {
+        if let checkbox = AXHelpers.findDescendant(
+            of: element, role: kAXCheckBoxRole, description: description, maxDepth: 4
+        ) {
+            return checkbox
+        }
         let buttons = AXHelpers.findAllDescendants(of: element, role: kAXButtonRole, maxDepth: 4)
         return buttons.first { button in
             guard let desc = AXHelpers.getDescription(button) else { return false }
-            return desc.hasPrefix(prefix)
+            return desc.hasPrefix(description)
         }
     }
 }

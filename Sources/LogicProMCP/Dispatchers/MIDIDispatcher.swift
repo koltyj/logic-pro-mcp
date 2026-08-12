@@ -17,7 +17,7 @@ struct MIDIDispatcher {
             send_pitch_bend -> { value: Int, channel: Int } (-8192 to 8191); \
             send_aftertouch -> { value: Int, channel: Int }; \
             send_sysex -> { bytes: [Int] } or { data: String } (hex); \
-            mmc_locate -> { bar: Int } or { time: "HH:MM:SS:FF" }; \
+            mmc_locate -> { time: "HH:MM:SS:FF" }; \
             create_virtual_port -> { name: String }
             """,
         inputSchema: .object([
@@ -44,10 +44,26 @@ struct MIDIDispatcher {
     ) async -> CallTool.Result {
         switch command {
         case "send_note":
-            let note = params["note"]?.intValue ?? 60
-            let velocity = params["velocity"]?.intValue ?? 100
-            let channel = params["channel"]?.intValue ?? 1
-            let durationMs = params["duration_ms"]?.intValue ?? 500
+            let note: Int
+            let velocity: Int
+            let channel: Int
+            let durationMs: Int
+            switch InputValidation.int(params, keys: ["note"], default: 60, range: 0...127, label: "note") {
+            case .success(let value): note = value
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.int(params, keys: ["velocity"], default: 100, range: 0...127, label: "velocity") {
+            case .success(let value): velocity = value
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.midiChannel(params) {
+            case .success(let value): channel = value
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.int(params, keys: ["duration_ms"], default: 500, range: 0...10_000, label: "duration_ms") {
+            case .success(let value): durationMs = value
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "midi.send_note",
                 params: [
@@ -60,16 +76,26 @@ struct MIDIDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "send_chord":
-            // Accept either array of ints or comma-separated string
             let notesStr: String
-            if let arr = params["notes"]?.arrayValue {
-                notesStr = arr.compactMap { $0.intValue }.map(String.init).joined(separator: ",")
-            } else {
-                notesStr = params["notes"]?.stringValue ?? ""
+            let velocity: Int
+            let channel: Int
+            let durationMs: Int
+            switch InputValidation.midiNotes(params) {
+            case .success(let value): notesStr = value
+            case .failure(let message): return error(message)
             }
-            let velocity = params["velocity"]?.intValue ?? 100
-            let channel = params["channel"]?.intValue ?? 1
-            let durationMs = params["duration_ms"]?.intValue ?? 500
+            switch InputValidation.int(params, keys: ["velocity"], default: 100, range: 0...127, label: "velocity") {
+            case .success(let value): velocity = value
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.midiChannel(params) {
+            case .success(let value): channel = value
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.int(params, keys: ["duration_ms"], default: 500, range: 0...10_000, label: "duration_ms") {
+            case .success(let value): durationMs = value
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "midi.send_chord",
                 params: [
@@ -82,9 +108,21 @@ struct MIDIDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "send_cc":
-            let controller = params["controller"]?.intValue ?? 0
-            let value = params["value"]?.intValue ?? 0
-            let channel = params["channel"]?.intValue ?? 1
+            let controller: Int
+            let value: Int
+            let channel: Int
+            switch InputValidation.int(params, keys: ["controller"], default: 0, range: 0...127, label: "controller") {
+            case .success(let parsed): controller = parsed
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.int(params, keys: ["value"], default: 0, range: 0...127, label: "value") {
+            case .success(let parsed): value = parsed
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.midiChannel(params) {
+            case .success(let parsed): channel = parsed
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "midi.send_cc",
                 params: [
@@ -96,8 +134,16 @@ struct MIDIDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "send_program_change":
-            let program = params["program"]?.intValue ?? 0
-            let channel = params["channel"]?.intValue ?? 1
+            let program: Int
+            let channel: Int
+            switch InputValidation.int(params, keys: ["program"], default: 0, range: 0...127, label: "program") {
+            case .success(let value): program = value
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.midiChannel(params) {
+            case .success(let value): channel = value
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "midi.send_program_change",
                 params: ["program": String(program), "channel": String(channel)]
@@ -105,8 +151,16 @@ struct MIDIDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "send_pitch_bend":
-            let value = params["value"]?.intValue ?? 0
-            let channel = params["channel"]?.intValue ?? 1
+            let value: Int
+            let channel: Int
+            switch InputValidation.int(params, keys: ["value"], default: 0, range: -8192...8191, label: "value") {
+            case .success(let parsed): value = parsed
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.midiChannel(params) {
+            case .success(let parsed): channel = parsed
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "midi.send_pitch_bend",
                 params: ["value": String(value), "channel": String(channel)]
@@ -114,8 +168,16 @@ struct MIDIDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "send_aftertouch":
-            let value = params["value"]?.intValue ?? 0
-            let channel = params["channel"]?.intValue ?? 1
+            let value: Int
+            let channel: Int
+            switch InputValidation.int(params, keys: ["value"], default: 0, range: 0...127, label: "value") {
+            case .success(let parsed): value = parsed
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.midiChannel(params) {
+            case .success(let parsed): channel = parsed
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "midi.send_aftertouch",
                 params: ["value": String(value), "channel": String(channel)]
@@ -125,20 +187,33 @@ struct MIDIDispatcher {
         case "send_sysex":
             let data: String
             if let bytes = params["bytes"]?.arrayValue {
-                data = bytes.compactMap { $0.intValue }
-                    .map { String(format: "%02X", $0) }
-                    .joined(separator: " ")
+                let parsed = bytes.compactMap(\.intValue)
+                guard parsed.count == bytes.count, parsed.count <= 1_024,
+                      parsed.allSatisfy({ (0...255).contains($0) }) else {
+                    return error("bytes must contain at most 1024 values between 0 and 255")
+                }
+                data = parsed.map { String(format: "%02X", $0) }.joined(separator: " ")
             } else {
                 data = params["data"]?.stringValue ?? ""
             }
+            let tokens = data.split { $0 == " " || $0 == "," || $0 == "\n" || $0 == "\t" }
+            let parsed = tokens.compactMap { UInt8($0, radix: 16) }
+            guard parsed.count == tokens.count, (2...1_024).contains(parsed.count),
+                  parsed.first == 0xF0, parsed.last == 0xF7 else {
+                return error("SysEx must be 2-1024 hex bytes starting with F0 and ending with F7")
+            }
             let result = await router.route(
                 operation: "midi.send_sysex",
-                params: ["data": data]
+                params: ["data": parsed.map { String(format: "%02X", $0) }.joined(separator: " ")]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "create_virtual_port":
-            let name = params["name"]?.stringValue ?? "Virtual Port"
+            let name: String
+            switch InputValidation.string(params, keys: ["name"], default: "Virtual Port", maxLength: 64, label: "name") {
+            case .success(let value): name = value
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "midi.create_virtual_port",
                 params: ["name": name]
@@ -158,12 +233,8 @@ struct MIDIDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "mmc_locate":
-            if let bar = params["bar"]?.intValue {
-                let result = await router.route(
-                    operation: "mmc.locate",
-                    params: ["bar": String(bar)]
-                )
-                return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
+            if params["bar"] != nil {
+                return error("mmc_locate requires time as HH:MM:SS:FF; bar positions cannot be converted without tempo and time-signature context")
             }
             let time = params["time"]?.stringValue ?? "00:00:00:00"
             let result = await router.route(
@@ -178,5 +249,9 @@ struct MIDIDispatcher {
                 isError: true
             )
         }
+    }
+
+    private static func error(_ message: String) -> CallTool.Result {
+        CallTool.Result(content: [.text(message)], isError: true)
     }
 }

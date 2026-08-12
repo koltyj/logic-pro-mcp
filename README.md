@@ -2,7 +2,7 @@
 
 [![Swift 6.0+](https://img.shields.io/badge/Swift-6.0+-F05138.svg)](https://swift.org)
 [![macOS 14+](https://img.shields.io/badge/macOS-14+-000000.svg?logo=apple)](https://developer.apple.com/macos/)
-[![MCP SDK 0.10](https://img.shields.io/badge/MCP_SDK-0.10-blue.svg)](https://github.com/modelcontextprotocol/swift-sdk)
+[![MCP SDK 0.12](https://img.shields.io/badge/MCP_SDK-0.12-blue.svg)](https://github.com/modelcontextprotocol/swift-sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Bidirectional, stateful control of Logic Pro from AI assistants. Combines **5 native macOS control channels** (CoreMIDI, Accessibility, CGEvent, AppleScript, OSC) into a single MCP server with smart routing, fallback chains, and sub-millisecond transport latency.

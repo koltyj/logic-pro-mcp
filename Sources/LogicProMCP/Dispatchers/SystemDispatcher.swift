@@ -162,7 +162,7 @@ struct SystemDispatcher {
                   mmc_play          -> {}
                   mmc_stop          -> {}
                   mmc_record        -> {}
-                  mmc_locate        -> { bar: Int } or { time: "HH:MM:SS:FF" }
+                  mmc_locate        -> { time: "HH:MM:SS:FF" }
 
                 Read ports via resource: logic://midi/ports
                 """

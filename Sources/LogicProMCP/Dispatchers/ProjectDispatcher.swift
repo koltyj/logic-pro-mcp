@@ -42,9 +42,12 @@ struct ProjectDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "open":
-            let path = params["path"]?.stringValue ?? ""
-            guard !path.isEmpty else {
-                return CallTool.Result(content: [.text("open requires 'path' param")], isError: true)
+            let path: String
+            switch InputValidation.logicProjectPath(params, mustExist: true) {
+            case .success(let validatedPath):
+                path = validatedPath
+            case .failure(let message):
+                return CallTool.Result(content: [.text(message)], isError: true)
             }
             let result = await router.route(
                 operation: "project.open",
@@ -57,9 +60,12 @@ struct ProjectDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "save_as":
-            let path = params["path"]?.stringValue ?? ""
-            guard !path.isEmpty else {
-                return CallTool.Result(content: [.text("save_as requires 'path' param")], isError: true)
+            let path: String
+            switch InputValidation.logicProjectPath(params, mustExist: false) {
+            case .success(let validatedPath):
+                path = validatedPath
+            case .failure(let message):
+                return CallTool.Result(content: [.text(message)], isError: true)
             }
             let result = await router.route(
                 operation: "project.save_as",
@@ -79,30 +85,28 @@ struct ProjectDispatcher {
             if ProcessUtils.isLogicProRunning {
                 return CallTool.Result(content: [.text("Logic Pro is already running")], isError: false)
             }
-            let script = "tell application \"Logic Pro\" to activate"
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
-            do {
-                try process.run()
-                process.waitUntilExit()
+            let scripts = ServerConfig.logicProBundleIDs.map {
+                "tell application id \"\($0)\" to activate"
+            } + ["tell application \"\(ServerConfig.logicProProcessName)\" to activate"]
+
+            for script in scripts where (try? runAppleScript(script)) == true {
                 return CallTool.Result(content: [.text("Logic Pro launched")], isError: false)
-            } catch {
-                return CallTool.Result(content: [.text("Failed to launch Logic Pro: \(error)")], isError: true)
             }
+
+            if ProcessUtils.isLogicProRunning {
+                return CallTool.Result(content: [.text("Logic Pro launched")], isError: false)
+            }
+            return CallTool.Result(content: [.text("Failed to launch Logic Pro")], isError: true)
 
         case "quit":
             if !ProcessUtils.isLogicProRunning {
                 return CallTool.Result(content: [.text("Logic Pro is not running")], isError: false)
             }
-            let script = "tell application \"Logic Pro\" to quit"
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
             do {
-                try process.run()
-                process.waitUntilExit()
-                return CallTool.Result(content: [.text("Logic Pro quit")], isError: false)
+                if try runAppleScript("tell \(ProcessUtils.logicProAppleScriptTarget) to quit") {
+                    return CallTool.Result(content: [.text("Logic Pro quit")], isError: false)
+                }
+                return CallTool.Result(content: [.text("Failed to quit Logic Pro")], isError: true)
             } catch {
                 return CallTool.Result(content: [.text("Failed to quit Logic Pro: \(error)")], isError: true)
             }
@@ -113,5 +117,25 @@ struct ProjectDispatcher {
                 isError: true
             )
         }
+    }
+
+    private static func runAppleScript(_ script: String) throws -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        try process.run()
+        let deadline = Date().addingTimeInterval(ServerConfig.appleScriptTimeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        guard !process.isRunning else {
+            process.terminate()
+            throw NSError(
+                domain: "LogicProMCP.AppleScript",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "AppleScript timed out"]
+            )
+        }
+        return process.terminationStatus == 0
     }
 }
