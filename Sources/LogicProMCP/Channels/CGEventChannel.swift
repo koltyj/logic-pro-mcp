@@ -45,7 +45,7 @@ actor CGEventChannel: Channel {
         "transport.fast_forward":     .key(124),        // Right arrow
         "transport.toggle_cycle":     .key(8),          // C
         "transport.toggle_metronome": .key(40),         // K
-        "transport.goto_position":    .key(47),         // / (opens Go To Position)
+        "transport.goto_position":    .key(44),         // / (opens Go To Position)
 
         // Editing
         "edit.undo":                  .cmd(6),          // Cmd+Z
@@ -109,7 +109,7 @@ actor CGEventChannel: Channel {
             guard let position = params["position"] else {
                 return .error("Missing 'position' parameter")
             }
-            guard postKeyEvent(keyCode: 47, flags: [], pid: pid) else {
+            guard postKeyEvent(keyCode: 44, flags: [], pid: pid) else {
                 return .error("Failed to open Go To Position")
             }
             try? await Task.sleep(for: .milliseconds(100))
