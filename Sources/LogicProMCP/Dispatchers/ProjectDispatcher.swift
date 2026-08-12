@@ -93,6 +93,9 @@ struct ProjectDispatcher {
                 return CallTool.Result(content: [.text("Logic Pro launched")], isError: false)
             }
 
+            if ProcessUtils.isLogicProRunning {
+                return CallTool.Result(content: [.text("Logic Pro launched")], isError: false)
+            }
             return CallTool.Result(content: [.text("Failed to launch Logic Pro")], isError: true)
 
         case "quit":
