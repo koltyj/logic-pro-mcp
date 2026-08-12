@@ -211,9 +211,12 @@ actor MIDIEngine {
                 return
             }
 
-            let status = MIDIReceived(virtualSource, packetList)
-            if status != noErr {
-                Log.error("MIDIReceived failed with status \(status)", subsystem: "midi")
+            let sources = ([virtualSource] + additionalVirtualSources).filter { $0 != 0 }
+            for source in sources {
+                let status = MIDIReceived(source, packetList)
+                if status != noErr {
+                    Log.error("MIDIReceived failed with status \(status)", subsystem: "midi")
+                }
             }
         }
     }
