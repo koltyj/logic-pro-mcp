@@ -281,7 +281,7 @@ actor CoreMIDIChannel: Channel {
         guard hours <= 23,
               minutes <= 59,
               seconds <= 59,
-              frames <= 59,
+              frames <= 29,
               subframes <= 99 else {
             return nil
         }

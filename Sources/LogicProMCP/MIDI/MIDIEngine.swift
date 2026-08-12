@@ -9,6 +9,7 @@ actor MIDIEngine {
     private var virtualDestination: MIDIEndpointRef = 0
     private var additionalVirtualSources: [MIDIEndpointRef] = []
     private var additionalVirtualDestinations: [MIDIEndpointRef] = []
+    private var additionalVirtualPortNames: Set<String> = []
     private var isRunning = false
 
     /// Stream of inbound MIDI packets from Logic Pro via the virtual destination.
@@ -78,6 +79,7 @@ actor MIDIEngine {
         if client != 0 { MIDIClientDispose(client) }
         additionalVirtualSources.removeAll()
         additionalVirtualDestinations.removeAll()
+        additionalVirtualPortNames.removeAll()
         virtualSource = 0
         virtualDestination = 0
         client = 0
@@ -92,6 +94,10 @@ actor MIDIEngine {
     func createVirtualPort(named name: String) throws {
         if !isRunning {
             try start()
+        }
+        guard !additionalVirtualPortNames.contains(name) else { return }
+        guard additionalVirtualPortNames.count < 16 else {
+            throw MIDIEngineError.virtualPortLimitReached
         }
 
         var source: MIDIEndpointRef = 0
@@ -116,6 +122,7 @@ actor MIDIEngine {
 
         additionalVirtualSources.append(source)
         additionalVirtualDestinations.append(destination)
+        additionalVirtualPortNames.insert(name)
     }
 
     // MARK: - Send: Notes
@@ -249,4 +256,5 @@ enum MIDIEngineError: Error, Sendable {
     case clientCreationFailed(OSStatus)
     case sourceCreationFailed(OSStatus)
     case destinationCreationFailed(OSStatus)
+    case virtualPortLimitReached
 }

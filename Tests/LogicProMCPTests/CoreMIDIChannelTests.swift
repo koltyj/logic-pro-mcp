@@ -79,6 +79,7 @@ final class CoreMIDIChannelTests: XCTestCase {
             ("midi.send_sysex", ["data": "F0 7F nope F7"]),
             ("mmc.locate", ["time": "00:60:01:12"]),
             ("mmc.locate", ["time": "00:00:01:12:"]),
+            ("mmc.locate", ["time": "00:00:01:30"]),
             ("mmc.locate", ["hours": "0", "minutes": "0", "seconds": "1", "frames": "60"]),
             ("mmc.locate", ["time": "00:00:01:12", "subframes": "100"]),
         ]

@@ -38,6 +38,22 @@ final class InputValidationTests: XCTestCase {
         ) {
             XCTFail("Expected a non-Logic project path to fail")
         }
+
+        let regularFile = root.appendingPathComponent("NotAProject.logicx")
+        FileManager.default.createFile(atPath: regularFile.path, contents: Data())
+        if case .success = InputValidation.logicProjectPath(
+            ["path": .string(regularFile.path)], mustExist: true
+        ) {
+            XCTFail("Expected a regular .logicx file to fail")
+        }
+    }
+
+    func testPositionFormat() {
+        XCTAssertTrue(TransportDispatcher.isSafePosition("1.2.3.4"))
+        XCTAssertTrue(TransportDispatcher.isSafePosition("00:01:02:03"))
+        XCTAssertFalse(TransportDispatcher.isSafePosition("1::2"))
+        XCTAssertFalse(TransportDispatcher.isSafePosition("1.2:3.4"))
+        XCTAssertFalse(TransportDispatcher.isSafePosition("1.2.3.4.5"))
     }
 
     func testMIDIValues() {

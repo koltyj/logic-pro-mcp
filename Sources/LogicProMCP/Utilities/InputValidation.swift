@@ -125,7 +125,8 @@ enum InputValidation {
 
         var isDirectory = ObjCBool(false)
         if mustExist {
-            guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory) else {
+            guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
                 return .failure("\(label) does not exist: \(expanded)")
             }
         } else {

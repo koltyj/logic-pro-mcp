@@ -152,11 +152,13 @@ struct TransportDispatcher {
         }
     }
 
-    private static func isSafePosition(_ value: String) -> Bool {
-        let allowed = CharacterSet(charactersIn: "0123456789:.")
-        return !value.isEmpty
-            && value.count <= 32
-            && value.rangeOfCharacter(from: allowed.inverted) == nil
-            && value.contains { $0 == "." || $0 == ":" }
+    static func isSafePosition(_ value: String) -> Bool {
+        guard !value.isEmpty, value.count <= 32 else { return false }
+        guard value.contains(":") != value.contains(".") else { return false }
+        let separator: Character = value.contains(":") ? ":" : "."
+        let fields = value.split(separator: separator, omittingEmptySubsequences: false)
+        return fields.count == 4 && fields.allSatisfy {
+            !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber }
+        }
     }
 }

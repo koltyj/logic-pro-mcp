@@ -121,7 +121,18 @@ struct ProjectDispatcher {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", script]
         try process.run()
-        process.waitUntilExit()
+        let deadline = Date().addingTimeInterval(ServerConfig.appleScriptTimeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        guard !process.isRunning else {
+            process.terminate()
+            throw NSError(
+                domain: "LogicProMCP.AppleScript",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "AppleScript timed out"]
+            )
+        }
         return process.terminationStatus == 0
     }
 }
