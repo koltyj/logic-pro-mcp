@@ -99,11 +99,24 @@ enum AXLogicProElements {
     /// Find the mixer area.
     static func getMixerArea() -> AXUIElement? {
         guard let window = mainWindow() else { return nil }
-        // The mixer typically appears as a distinct group/scroll area
-        if let mixer = AXHelpers.findDescendant(of: window, role: kAXGroupRole, identifier: "Mixer") {
-            return mixer
+        // Logic Pro leaves AXIdentifier empty on these containers, so the mixer
+        // has to be matched on AXDescription instead.
+        //
+        // Anchor on the window-level "Mixer" pane before descending: the
+        // Inspector holds its own AXLayoutArea also described "Mixer" (the
+        // single-channel strip), and a plain recursive search finds that one
+        // first and reports one or two strips instead of the full desk.
+        guard let pane = AXHelpers.findChild(
+            of: window, role: kAXGroupRole, description: "Mixer"
+        ) else { return nil }
+
+        // The channel strips live in an AXLayoutArea inside that pane.
+        if let area = AXHelpers.findDescendant(
+            of: pane, role: "AXLayoutArea", description: "Mixer", maxDepth: 3
+        ) {
+            return area
         }
-        return AXHelpers.findDescendant(of: window, role: kAXScrollAreaRole, identifier: "Mixer")
+        return pane
     }
 
     /// Find a volume fader for a specific track index within the mixer.

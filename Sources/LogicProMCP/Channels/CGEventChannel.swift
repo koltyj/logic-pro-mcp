@@ -2,8 +2,12 @@ import CoreGraphics
 import Foundation
 
 /// Channel that sends keyboard shortcuts to Logic Pro via CGEvent.
-/// Uses CGEvent.postToPid() to deliver keystrokes directly without requiring window focus.
+/// Uses CGEvent.postToPid() to deliver keystrokes to the Logic Pro process.
 /// This is the primary channel for transport control and editing operations.
+///
+/// Logic Pro discards posted key events unless it is the frontmost application,
+/// so every send activates it first. Note that postToPid() returns no delivery
+/// receipt, so a successful result means "posted", not "acted upon".
 actor CGEventChannel: Channel {
     let id: ChannelID = .cgEvent
 
@@ -105,6 +109,10 @@ actor CGEventChannel: Channel {
             return .error("Logic Pro is not running")
         }
 
+        guard await ensureFrontmost() else {
+            return .error("Could not bring Logic Pro to the front; it would discard the keystroke")
+        }
+
         if operation == "transport.goto_position" {
             guard let position = params["position"] else {
                 return .error("Missing 'position' parameter")
@@ -142,6 +150,24 @@ actor CGEventChannel: Channel {
     }
 
     // MARK: - Event Posting
+
+    /// Bring Logic Pro to the front and wait for the activation to land.
+    /// Logic Pro ignores events posted via postToPid() while another app is
+    /// active, so this is a precondition for delivery, not an optimisation.
+    private func ensureFrontmost() async -> Bool {
+        if ProcessUtils.isLogicProFrontmost { return true }
+        guard ProcessUtils.activateLogicPro() else {
+            Log.error("activateLogicPro() failed", subsystem: "cgEvent")
+            return false
+        }
+        // Activation is asynchronous; poll briefly rather than sleeping blind.
+        for _ in 0..<20 {
+            try? await Task.sleep(for: .milliseconds(25))
+            if ProcessUtils.isLogicProFrontmost { return true }
+        }
+        Log.warn("Logic Pro did not become frontmost within 500ms", subsystem: "cgEvent")
+        return false
+    }
 
     /// Post a key-down/key-up pair to a specific PID.
     private func postKeyEvent(keyCode: CGKeyCode, flags: CGEventFlags, pid: pid_t) -> Bool {

@@ -266,16 +266,25 @@ actor AccessibilityChannel: Channel {
         var channelStrips: [ChannelStripState] = []
 
         for (index, strip) in strips.enumerated() {
-            let sliders = AXHelpers.findAllDescendants(of: strip, role: kAXSliderRole, maxDepth: 4)
-            let volume = sliders.first.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0
-            let pan = sliders.count > 1
-                ? AXValueExtractors.extractSliderValue(sliders[1]) ?? 0.0
-                : 0.0
+            // Match the controls on their AXDescription rather than on slider
+            // order, which is not guaranteed across strip types (aux, output
+            // and master strips expose different control sets).
+            let fader = AXHelpers.findDescendant(
+                of: strip, role: kAXSliderRole, description: "volume fader", maxDepth: 4
+            )
+            let panKnob = AXHelpers.findDescendant(
+                of: strip, role: kAXSliderRole, description: "pan", maxDepth: 4
+            )
+            let eqButton = AXHelpers.findDescendant(
+                of: strip, role: kAXButtonRole, description: "EQ", maxDepth: 4
+            )
 
             channelStrips.append(ChannelStripState(
                 trackIndex: index,
-                volume: volume,
-                pan: pan
+                name: AXHelpers.getDescription(strip),
+                volume: fader.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
+                pan: panKnob.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
+                eqEnabled: eqButton.flatMap { AXHelpers.getAttribute($0, kAXValueAttribute) } == "on"
             ))
         }
         return encodeResult(channelStrips)

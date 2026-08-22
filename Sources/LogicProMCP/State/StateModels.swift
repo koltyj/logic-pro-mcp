@@ -43,6 +43,10 @@ struct TrackState: Sendable, Codable, Identifiable {
 /// Mixer channel strip state (extends track with routing info).
 struct ChannelStripState: Sendable, Codable {
     var trackIndex: Int
+    /// Strip name as shown in the mixer ("Basic", "Aux 1", "Stereo Out"...).
+    /// The mixer includes aux, output and master strips, so trackIndex is a
+    /// position in the mixer, not an index into the track list.
+    var name: String?
     var volume: Double = 0.0
     var pan: Double = 0.0
     var sends: [SendState] = []

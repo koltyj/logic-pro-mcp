@@ -62,6 +62,10 @@ actor StatePoller {
 
             if shouldPollTracks {
                 await pollTracks(axChannel: axChannel, cache: cache)
+                await pollMixer(axChannel: axChannel, cache: cache)
+                // Poll the project last so it can fold in the track/transport
+                // values refreshed above.
+                await pollProject(axChannel: axChannel, cache: cache)
             }
 
             // Sleep until next poll
@@ -109,6 +113,48 @@ actor StatePoller {
             await cache.updateTracks(tracks)
         } catch {
             Log.debug("Tracks decode failed: \(error)", subsystem: "poller")
+        }
+    }
+
+    private func pollMixer(axChannel: AccessibilityChannel, cache: StateCache) async {
+        let result = await axChannel.execute(operation: "mixer.get_state", params: [:])
+        guard case .success(let json) = result else {
+            // Expected whenever the Mixer pane is hidden — AX can only read visible UI.
+            Log.debug("Mixer poll failed: \(result.message)", subsystem: "poller")
+            return
+        }
+        guard let data = json.data(using: .utf8) else { return }
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let strips = try decoder.decode([ChannelStripState].self, from: data)
+            await cache.updateChannelStrips(strips)
+        } catch {
+            Log.debug("Mixer decode failed: \(error)", subsystem: "poller")
+        }
+    }
+
+    private func pollProject(axChannel: AccessibilityChannel, cache: StateCache) async {
+        let result = await axChannel.execute(operation: "project.get_info", params: [:])
+        guard case .success(let json) = result else {
+            Log.debug("Project poll failed: \(result.message)", subsystem: "poller")
+            return
+        }
+        guard let data = json.data(using: .utf8) else { return }
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var info = try decoder.decode(ProjectInfo.self, from: data)
+            // project.get_info reads the window title only. Fill the remaining
+            // fields from state the poller already refreshed, so the resource
+            // reports a coherent snapshot instead of struct defaults.
+            let transport = await cache.getTransport()
+            info.trackCount = await cache.getTracks().count
+            info.tempo = transport.tempo
+            info.sampleRate = transport.sampleRate
+            await cache.updateProject(info)
+        } catch {
+            Log.debug("Project decode failed: \(error)", subsystem: "poller")
         }
     }
 
