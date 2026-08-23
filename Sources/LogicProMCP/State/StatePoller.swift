@@ -46,7 +46,7 @@ actor StatePoller {
             let interval: PollInterval = Self.intervalForIdleTime(idle)
 
             // Always poll transport (it changes most frequently)
-            await pollTransport(axChannel: axChannel, cache: cache)
+            let transport = await pollTransport(axChannel: axChannel, cache: cache)
             transportCounter += 1
 
             // Poll tracks/mixer less frequently.
@@ -67,9 +67,15 @@ actor StatePoller {
                 // pass succeeded. Reading the cache instead would pair a newly
                 // opened project's name with the previous project's track
                 // count across a close/open.
-                if let freshTrackCount {
+                // Publish project state only when every field in it came from
+                // this pass. A stale tempo or sample rate would otherwise be
+                // attached to a freshly read project name.
+                if let freshTrackCount, let transport {
                     await pollProject(
-                        axChannel: axChannel, cache: cache, trackCount: freshTrackCount
+                        axChannel: axChannel,
+                        cache: cache,
+                        trackCount: freshTrackCount,
+                        transport: transport
                     )
                 }
             }
@@ -88,20 +94,27 @@ actor StatePoller {
 
     // MARK: - Individual pollers
 
-    private func pollTransport(axChannel: AccessibilityChannel, cache: StateCache) async {
+    /// Refresh the transport cache. Returns the state read in this cycle, or
+    /// nil if the read failed — callers must not fall back to the cached value,
+    /// which may predate a project change.
+    private func pollTransport(
+        axChannel: AccessibilityChannel, cache: StateCache
+    ) async -> TransportState? {
         let result = await axChannel.execute(operation: "transport.get_state", params: [:])
         guard case .success(let json) = result else {
             Log.debug("Transport poll failed: \(result.message)", subsystem: "poller")
-            return
+            return nil
         }
-        guard let data = json.data(using: .utf8) else { return }
+        guard let data = json.data(using: .utf8) else { return nil }
         do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let state = try decoder.decode(TransportState.self, from: data)
             await cache.updateTransport(state)
+            return state
         } catch {
             Log.debug("Transport decode failed: \(error)", subsystem: "poller")
+            return nil
         }
     }
 
@@ -146,7 +159,10 @@ actor StatePoller {
     }
 
     private func pollProject(
-        axChannel: AccessibilityChannel, cache: StateCache, trackCount: Int
+        axChannel: AccessibilityChannel,
+        cache: StateCache,
+        trackCount: Int,
+        transport: TransportState
     ) async {
         let result = await axChannel.execute(operation: "project.get_info", params: [:])
         guard case .success(let json) = result else {
@@ -161,7 +177,6 @@ actor StatePoller {
             // project.get_info reads the window title only. Fill the remaining
             // fields from this same pass, so the resource reports a coherent
             // snapshot instead of struct defaults.
-            let transport = await cache.getTransport()
             info.trackCount = trackCount
             info.tempo = transport.tempo
             info.sampleRate = transport.sampleRate

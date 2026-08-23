@@ -126,6 +126,12 @@ actor CGEventChannel: Channel {
             } catch {
                 return .error("Cancelled before entering the Go To Position value")
             }
+            // Focus can move during the 100ms wait, and Logic Pro would then
+            // discard the remaining events while postKeyEvent still reported
+            // success. Re-check rather than assume the earlier activation held.
+            guard await ensureFrontmost() else {
+                return .error("Could not bring Logic Pro to the front; it would discard the keystroke")
+            }
             guard postText(position, pid: pid), postKeyEvent(keyCode: 36, flags: [], pid: pid) else {
                 return .error("Failed to enter Go To Position value")
             }
