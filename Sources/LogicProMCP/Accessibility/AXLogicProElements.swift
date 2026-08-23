@@ -119,26 +119,51 @@ enum AXLogicProElements {
         return pane
     }
 
-    /// Find a volume fader for a specific track index within the mixer.
-    static func findFader(trackIndex: Int) -> AXUIElement? {
-        guard let mixer = getMixerArea() else { return nil }
-        let strips = AXHelpers.getChildren(mixer)
-        guard trackIndex >= 0 && trackIndex < strips.count else { return nil }
-        let strip = strips[trackIndex]
-        // Fader is an AXSlider within the channel strip
-        return AXHelpers.findDescendant(of: strip, role: kAXSliderRole, maxDepth: 4)
+    /// AXDescription values Logic Pro uses for the controls inside a channel
+    /// strip. Strips are matched on these rather than on child order, because
+    /// aux, output and master strips expose different control sets — the master
+    /// strip has no pan control at all, so an ordinal lookup silently returns
+    /// some other slider.
+    enum StripControl {
+        static let volume = "volume fader"
+        static let pan = "pan"
+        static let eq = "EQ"
     }
 
-    /// Find the pan knob for a track in the mixer.
+    /// The channel strips, in mixer order.
+    static func mixerStrips() -> [AXUIElement] {
+        guard let mixer = getMixerArea() else { return [] }
+        return AXHelpers.getChildren(mixer)
+    }
+
+    /// One channel strip by its position in the mixer.
+    static func mixerStrip(at index: Int) -> AXUIElement? {
+        let strips = mixerStrips()
+        guard strips.indices.contains(index) else { return nil }
+        return strips[index]
+    }
+
+    /// Find a control inside a channel strip by its AXDescription.
+    /// Returns nil when the strip has no such control, which is a real and
+    /// expected outcome — callers must not fall back to a positional guess.
+    static func stripControl(
+        _ strip: AXUIElement,
+        role: String,
+        description: String
+    ) -> AXUIElement? {
+        AXHelpers.findDescendant(of: strip, role: role, description: description, maxDepth: 4)
+    }
+
+    /// Find a volume fader for a specific strip index within the mixer.
+    static func findFader(trackIndex: Int) -> AXUIElement? {
+        guard let strip = mixerStrip(at: trackIndex) else { return nil }
+        return stripControl(strip, role: kAXSliderRole, description: StripControl.volume)
+    }
+
+    /// Find the pan control for a strip in the mixer. Nil on strips that have none.
     static func findPanKnob(trackIndex: Int) -> AXUIElement? {
-        guard let mixer = getMixerArea() else { return nil }
-        let strips = AXHelpers.getChildren(mixer)
-        guard trackIndex >= 0 && trackIndex < strips.count else { return nil }
-        let strip = strips[trackIndex]
-        // Pan is typically the second slider or a knob-type element
-        let sliders = AXHelpers.findAllDescendants(of: strip, role: kAXSliderRole, maxDepth: 4)
-        // Convention: first slider = volume, second = pan (if present)
-        return sliders.count > 1 ? sliders[1] : nil
+        guard let strip = mixerStrip(at: trackIndex) else { return nil }
+        return stripControl(strip, role: kAXSliderRole, description: StripControl.pan)
     }
 
     // MARK: - Menu Bar

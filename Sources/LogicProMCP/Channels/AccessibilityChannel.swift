@@ -263,29 +263,8 @@ actor AccessibilityChannel: Channel {
             return .error("Cannot locate mixer — is it visible?")
         }
         let strips = AXHelpers.getChildren(mixer)
-        var channelStrips: [ChannelStripState] = []
-
-        for (index, strip) in strips.enumerated() {
-            // Match the controls on their AXDescription rather than on slider
-            // order, which is not guaranteed across strip types (aux, output
-            // and master strips expose different control sets).
-            let fader = AXHelpers.findDescendant(
-                of: strip, role: kAXSliderRole, description: "volume fader", maxDepth: 4
-            )
-            let panKnob = AXHelpers.findDescendant(
-                of: strip, role: kAXSliderRole, description: "pan", maxDepth: 4
-            )
-            let eqButton = AXHelpers.findDescendant(
-                of: strip, role: kAXButtonRole, description: "EQ", maxDepth: 4
-            )
-
-            channelStrips.append(ChannelStripState(
-                trackIndex: index,
-                name: AXHelpers.getDescription(strip),
-                volume: fader.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
-                pan: panKnob.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
-                eqEnabled: eqButton.flatMap { AXHelpers.getAttribute($0, kAXValueAttribute) } == "on"
-            ))
+        let channelStrips = strips.enumerated().map { index, strip in
+            Self.channelStripState(for: strip, index: index)
         }
         return encodeResult(channelStrips)
     }
@@ -301,15 +280,28 @@ actor AccessibilityChannel: Channel {
         guard index >= 0 && index < strips.count else {
             return .error("Channel strip index \(index) out of range")
         }
-        let strip = strips[index]
-        let sliders = AXHelpers.findAllDescendants(of: strip, role: kAXSliderRole, maxDepth: 4)
-        let volume = sliders.first.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0
-        let pan = sliders.count > 1
-            ? AXValueExtractors.extractSliderValue(sliders[1]) ?? 0.0
-            : 0.0
+        return encodeResult(Self.channelStripState(for: strips[index], index: index))
+    }
 
-        let state = ChannelStripState(trackIndex: index, volume: volume, pan: pan)
-        return encodeResult(state)
+    /// Read one channel strip. Shared by mixer.get_state and
+    /// mixer.get_channel_strip so both resolve controls the same way.
+    private static func channelStripState(for strip: AXUIElement, index: Int) -> ChannelStripState {
+        let fader = AXLogicProElements.stripControl(
+            strip, role: kAXSliderRole, description: AXLogicProElements.StripControl.volume
+        )
+        let panKnob = AXLogicProElements.stripControl(
+            strip, role: kAXSliderRole, description: AXLogicProElements.StripControl.pan
+        )
+        let eqButton = AXLogicProElements.stripControl(
+            strip, role: kAXButtonRole, description: AXLogicProElements.StripControl.eq
+        )
+        return ChannelStripState(
+            trackIndex: index,
+            name: AXHelpers.getDescription(strip),
+            volume: fader.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
+            pan: panKnob.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
+            eqEnabled: eqButton.flatMap { AXHelpers.getAttribute($0, kAXValueAttribute) } == "on"
+        )
     }
 
     private func setMixerValue(params: [String: String], target: MixerTarget) -> ChannelResult {

@@ -61,11 +61,17 @@ actor StatePoller {
             }
 
             if shouldPollTracks {
-                await pollTracks(axChannel: axChannel, cache: cache)
+                let freshTrackCount = await pollTracks(axChannel: axChannel, cache: cache)
                 await pollMixer(axChannel: axChannel, cache: cache)
-                // Poll the project last so it can fold in the track/transport
-                // values refreshed above.
-                await pollProject(axChannel: axChannel, cache: cache)
+                // Only refresh the project when the track read in this same
+                // pass succeeded. Reading the cache instead would pair a newly
+                // opened project's name with the previous project's track
+                // count across a close/open.
+                if let freshTrackCount {
+                    await pollProject(
+                        axChannel: axChannel, cache: cache, trackCount: freshTrackCount
+                    )
+                }
             }
 
             // Sleep until next poll
@@ -99,20 +105,25 @@ actor StatePoller {
         }
     }
 
-    private func pollTracks(axChannel: AccessibilityChannel, cache: StateCache) async {
+    /// Refresh the track cache. Returns the number of tracks read, or nil if
+    /// the read failed — callers must not substitute the cached count, which may
+    /// belong to a previously open project.
+    private func pollTracks(axChannel: AccessibilityChannel, cache: StateCache) async -> Int? {
         let result = await axChannel.execute(operation: "track.get_tracks", params: [:])
         guard case .success(let json) = result else {
             Log.debug("Tracks poll failed: \(result.message)", subsystem: "poller")
-            return
+            return nil
         }
-        guard let data = json.data(using: .utf8) else { return }
+        guard let data = json.data(using: .utf8) else { return nil }
         do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let tracks = try decoder.decode([TrackState].self, from: data)
             await cache.updateTracks(tracks)
+            return tracks.count
         } catch {
             Log.debug("Tracks decode failed: \(error)", subsystem: "poller")
+            return nil
         }
     }
 
@@ -134,7 +145,9 @@ actor StatePoller {
         }
     }
 
-    private func pollProject(axChannel: AccessibilityChannel, cache: StateCache) async {
+    private func pollProject(
+        axChannel: AccessibilityChannel, cache: StateCache, trackCount: Int
+    ) async {
         let result = await axChannel.execute(operation: "project.get_info", params: [:])
         guard case .success(let json) = result else {
             Log.debug("Project poll failed: \(result.message)", subsystem: "poller")
@@ -146,10 +159,10 @@ actor StatePoller {
             decoder.dateDecodingStrategy = .iso8601
             var info = try decoder.decode(ProjectInfo.self, from: data)
             // project.get_info reads the window title only. Fill the remaining
-            // fields from state the poller already refreshed, so the resource
-            // reports a coherent snapshot instead of struct defaults.
+            // fields from this same pass, so the resource reports a coherent
+            // snapshot instead of struct defaults.
             let transport = await cache.getTransport()
-            info.trackCount = await cache.getTracks().count
+            info.trackCount = trackCount
             info.tempo = transport.tempo
             info.sampleRate = transport.sampleRate
             await cache.updateProject(info)
