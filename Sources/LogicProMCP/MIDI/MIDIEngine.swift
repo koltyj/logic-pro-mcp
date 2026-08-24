@@ -253,12 +253,13 @@ actor MIDIEngine {
                 Log.error("No MIDI sources available", subsystem: "midi")
                 return false
             }
-            var accepted = true
+            var accepted = false
             for source in sources {
                 let status = MIDIReceived(source, packetList)
                 if status != noErr {
                     Log.error("MIDIReceived failed with status \(status)", subsystem: "midi")
-                    accepted = false
+                } else {
+                    accepted = true
                 }
             }
             return accepted

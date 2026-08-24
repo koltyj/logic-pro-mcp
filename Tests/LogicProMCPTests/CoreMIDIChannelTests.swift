@@ -1,3 +1,4 @@
+import CoreMIDI
 import XCTest
 @testable import LogicProMCP
 
@@ -115,5 +116,38 @@ final class CoreMIDIChannelTests: XCTestCase {
         guard case .error = result else {
             return XCTFail("A stopped MIDI engine must report an error")
         }
+    }
+
+    func testCoreMIDIReportsPartialFanOutAsAccepted() async throws {
+        let channel = CoreMIDIChannel(engine: MIDIEngine())
+        try await channel.start()
+
+        let portName = "Stale Test Port"
+        let created = await channel.execute(
+            operation: "midi.create_virtual_port",
+            params: ["name": portName]
+        )
+        XCTAssertTrue(created.isSuccess)
+
+        let source = try XCTUnwrap((0..<MIDIGetNumberOfSources())
+            .map(MIDIGetSource)
+            .first { endpointName($0) == "\(portName)-Out" })
+        XCTAssertEqual(MIDIEndpointDispose(source), noErr)
+
+        let result = await channel.execute(operation: "transport.play", params: [:])
+        guard case .unverified = result else {
+            await channel.stop()
+            return XCTFail("A send accepted by the primary source must remain accepted")
+        }
+
+        await channel.stop()
+    }
+
+    private func endpointName(_ endpoint: MIDIEndpointRef) -> String? {
+        var value: Unmanaged<CFString>?
+        guard MIDIObjectGetStringProperty(endpoint, kMIDIPropertyDisplayName, &value) == noErr else {
+            return nil
+        }
+        return value?.takeRetainedValue() as String?
     }
 }
