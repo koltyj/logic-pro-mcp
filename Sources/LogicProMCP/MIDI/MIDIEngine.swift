@@ -235,7 +235,7 @@ actor MIDIEngine {
 
             let packetList = storage.bindMemory(to: MIDIPacketList.self, capacity: 1)
             let packet = MIDIPacketListInit(packetList)
-            _ = MIDIPacketListAdd(
+            let added = MIDIPacketListAdd(
                 packetList,
                 packetListSize,
                 packet,
@@ -243,6 +243,10 @@ actor MIDIEngine {
                 bytes.count,
                 baseAddress
             )
+            guard Int(bitPattern: added) != 0 else {
+                Log.error("Failed to create MIDI packet for \(bytes.count) bytes", subsystem: "midi")
+                return false
+            }
 
             let sources = ([virtualSource] + additionalVirtualSources).filter { $0 != 0 }
             guard !sources.isEmpty else {
