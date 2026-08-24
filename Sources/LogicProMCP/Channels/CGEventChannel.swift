@@ -135,7 +135,7 @@ actor CGEventChannel: Channel {
             guard postText(position, pid: pid), postKeyEvent(keyCode: 36, flags: [], pid: pid) else {
                 return .error("Failed to enter Go To Position value")
             }
-            return .success("{\"position\":\"\(position)\"}")
+            return .unverified("Go To Position was posted for \(position); Logic outcome is not verified")
         }
 
         guard let shortcut = Self.keyMap[operation] else {
@@ -148,7 +148,7 @@ actor CGEventChannel: Channel {
 
         let sent = postKeyEvent(keyCode: shortcut.keyCode, flags: shortcut.flags, pid: pid)
         if sent {
-            return .success("{\"operation\":\"\(operation)\",\"sent\":true}")
+            return .unverified("Keyboard shortcut posted for \(operation); Logic outcome is not verified")
         } else {
             return .error("Failed to post CGEvent for \(operation)")
         }

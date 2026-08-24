@@ -1,3 +1,4 @@
+import CoreMIDI
 import XCTest
 @testable import LogicProMCP
 
@@ -16,16 +17,30 @@ final class CoreMIDIChannelTests: XCTestCase {
             ("midi.send_aftertouch", ["pressure": "64", "channel": "1"]),
             ("midi.send_sysex", ["data": "F0 7F 7F 06 02 F7"]),
             ("midi.send_sysex", ["bytes": "F0 7F 7F 06 02 F7"]),
-            ("midi.create_virtual_port", ["name": "Test Port"]),
         ]
 
         for testCase in cases {
             let result = await channel.execute(operation: testCase.operation, params: testCase.params)
-            XCTAssertTrue(
-                result.isSuccess,
-                "\(testCase.operation) should be handled, got: \(result.message)"
-            )
+            guard case .unverified = result else {
+                return XCTFail("\(testCase.operation) should be unverified, got: \(result.message)")
+            }
+            XCTAssertTrue(result.isSuccess, "\(testCase.operation) should be accepted as successful")
         }
+
+        let ports = await channel.execute(operation: "midi.list_ports", params: [:])
+        guard case .success(let json) = ports,
+              let data = json.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: [String]] else {
+            return XCTFail("midi.list_ports should return JSON")
+        }
+        XCTAssertTrue(object["sources"]?.contains(ServerConfig.virtualMIDISourceName) == true)
+        XCTAssertTrue(object["destinations"]?.contains(ServerConfig.virtualMIDISinkName) == true)
+
+        let virtualPort = await channel.execute(
+            operation: "midi.create_virtual_port",
+            params: ["name": "Test Port"]
+        )
+        XCTAssertTrue(virtualPort.isSuccess)
 
         await channel.stop()
     }
@@ -39,7 +54,9 @@ final class CoreMIDIChannelTests: XCTestCase {
             params: ["value": "0", "channel": "1"]
         )
 
-        XCTAssertTrue(result.isSuccess, "midi.pitch_bend should keep accepting raw 14-bit values")
+        guard case .unverified = result else {
+            return XCTFail("midi.pitch_bend should be accepted as unverified")
+        }
 
         await channel.stop()
     }
@@ -60,10 +77,9 @@ final class CoreMIDIChannelTests: XCTestCase {
 
         for testCase in cases {
             let result = await channel.execute(operation: testCase.operation, params: testCase.params)
-            XCTAssertTrue(
-                result.isSuccess,
-                "\(testCase.operation) should be handled, got: \(result.message)"
-            )
+            guard case .unverified = result else {
+                return XCTFail("\(testCase.operation) should be unverified, got: \(result.message)")
+            }
         }
 
         await channel.stop()
@@ -86,12 +102,52 @@ final class CoreMIDIChannelTests: XCTestCase {
 
         for testCase in cases {
             let result = await channel.execute(operation: testCase.operation, params: testCase.params)
-            XCTAssertFalse(
-                result.isSuccess,
-                "\(testCase.operation) should reject malformed params, got: \(result.message)"
-            )
+            guard case .error = result else {
+                return XCTFail("\(testCase.operation) should reject malformed params, got: \(result.message)")
+            }
         }
 
         await channel.stop()
+    }
+
+    func testCoreMIDIReportsDroppedMessages() async {
+        let channel = CoreMIDIChannel(engine: MIDIEngine())
+        let result = await channel.execute(operation: "mmc.play", params: [:])
+        guard case .error = result else {
+            return XCTFail("A stopped MIDI engine must report an error")
+        }
+    }
+
+    func testCoreMIDIReportsPartialFanOutAsAccepted() async throws {
+        let channel = CoreMIDIChannel(engine: MIDIEngine())
+        try await channel.start()
+
+        let portName = "Stale Test Port"
+        let created = await channel.execute(
+            operation: "midi.create_virtual_port",
+            params: ["name": portName]
+        )
+        XCTAssertTrue(created.isSuccess)
+
+        let source = try XCTUnwrap((0..<MIDIGetNumberOfSources())
+            .map(MIDIGetSource)
+            .first { endpointName($0) == "\(portName)-Out" })
+        XCTAssertEqual(MIDIEndpointDispose(source), noErr)
+
+        let result = await channel.execute(operation: "transport.play", params: [:])
+        guard case .unverified = result else {
+            await channel.stop()
+            return XCTFail("A send accepted by the primary source must remain accepted")
+        }
+
+        await channel.stop()
+    }
+
+    private func endpointName(_ endpoint: MIDIEndpointRef) -> String? {
+        var value: Unmanaged<CFString>?
+        guard MIDIObjectGetStringProperty(endpoint, kMIDIPropertyDisplayName, &value) == noErr else {
+            return nil
+        }
+        return value?.takeRetainedValue() as String?
     }
 }
