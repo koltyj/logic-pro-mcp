@@ -125,7 +125,8 @@ struct ResourceHandlers {
               },
               "permissions": {
                 "accessibility": \(permissions.accessibility),
-                "automation": \(permissions.automationLogicPro)
+                "automation": \(permissions.automationLogicPro),
+                "automation_detail": "\(permissions.automation.describedStatus)"
               }
             }
             """
