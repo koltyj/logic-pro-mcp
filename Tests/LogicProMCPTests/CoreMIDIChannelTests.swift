@@ -23,6 +23,7 @@ final class CoreMIDIChannelTests: XCTestCase {
             guard case .unverified = result else {
                 return XCTFail("\(testCase.operation) should be unverified, got: \(result.message)")
             }
+            XCTAssertTrue(result.isSuccess, "\(testCase.operation) should be accepted as successful")
         }
 
         let ports = await channel.execute(operation: "midi.list_ports", params: [:])
