@@ -25,31 +25,31 @@ actor CoreMIDIChannel: Channel {
 
         case "transport.play", "mmc.play":
             await engine.sendSysEx(MMCCommands.play())
-            return .success("MMC play sent")
+            return .unverified("MMC play sent; Logic delivery is not verified")
 
         case "transport.stop", "mmc.stop":
             await engine.sendSysEx(MMCCommands.stop())
-            return .success("MMC stop sent")
+            return .unverified("MMC stop sent; Logic delivery is not verified")
 
         case "transport.pause", "mmc.pause":
             await engine.sendSysEx(MMCCommands.pause())
-            return .success("MMC pause sent")
+            return .unverified("MMC pause sent; Logic delivery is not verified")
 
         case "transport.record", "transport.record_strobe", "mmc.record_strobe":
             await engine.sendSysEx(MMCCommands.recordStrobe())
-            return .success("MMC record strobe sent")
+            return .unverified("MMC record strobe sent; Logic delivery is not verified")
 
         case "transport.record_exit", "mmc.record_exit":
             await engine.sendSysEx(MMCCommands.recordExit())
-            return .success("MMC record exit sent")
+            return .unverified("MMC record exit sent; Logic delivery is not verified")
 
         case "transport.fast_forward":
             await engine.sendSysEx(MMCCommands.fastForward())
-            return .success("MMC fast forward sent")
+            return .unverified("MMC fast forward sent; Logic delivery is not verified")
 
         case "transport.rewind":
             await engine.sendSysEx(MMCCommands.rewind())
-            return .success("MMC rewind sent")
+            return .unverified("MMC rewind sent; Logic delivery is not verified")
 
         case "transport.locate", "mmc.locate":
             guard let time = Self.parseSMPTETime(params) else {
@@ -62,7 +62,7 @@ actor CoreMIDIChannel: Channel {
                 frames: time.frames,
                 subframes: time.subframes
             ))
-            return .success("MMC locate sent to \(time.hours):\(time.minutes):\(time.seconds):\(time.frames).\(time.subframes)")
+            return .unverified("MMC locate sent to \(time.hours):\(time.minutes):\(time.seconds):\(time.frames).\(time.subframes); Logic delivery is not verified")
 
         // MARK: - Note Send
 
@@ -76,7 +76,7 @@ actor CoreMIDIChannel: Channel {
             await engine.sendNoteOn(channel: channel, note: note, velocity: velocity)
             try? await Task.sleep(nanoseconds: durationMs * 1_000_000)
             await engine.sendNoteOff(channel: channel, note: note)
-            return .success("Note \(note) on ch \(channel) vel \(velocity) dur \(durationMs)ms")
+            return .unverified("Note \(note) sent to the virtual MIDI port; Logic delivery is not verified")
 
         case "midi.note_on":
             guard let note = params["note"].flatMap(UInt8.init) else {
@@ -85,7 +85,7 @@ actor CoreMIDIChannel: Channel {
             let channel = params["channel"].flatMap(UInt8.init) ?? 0
             let velocity = params["velocity"].flatMap(UInt8.init) ?? 100
             await engine.sendNoteOn(channel: channel, note: note, velocity: velocity)
-            return .success("Note on \(note) ch \(channel) vel \(velocity)")
+            return .unverified("Note on \(note) sent to the virtual MIDI port; Logic delivery is not verified")
 
         case "midi.note_off":
             guard let note = params["note"].flatMap(UInt8.init) else {
@@ -93,7 +93,7 @@ actor CoreMIDIChannel: Channel {
             }
             let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendNoteOff(channel: channel, note: note)
-            return .success("Note off \(note) ch \(channel)")
+            return .unverified("Note off \(note) sent to the virtual MIDI port; Logic delivery is not verified")
 
         // MARK: - CC
 
@@ -122,7 +122,7 @@ actor CoreMIDIChannel: Channel {
             for note in notes {
                 await engine.sendNoteOff(channel: channel, note: note)
             }
-            return .success("Chord \(notes.map(String.init).joined(separator: ",")) on ch \(channel) vel \(velocity) dur \(durationMs)ms")
+            return .unverified("Chord \(notes.map(String.init).joined(separator: ",")) sent to the virtual MIDI port; Logic delivery is not verified")
 
         case "midi.send_cc":
             guard let controller = params["controller"].flatMap(UInt8.init),
@@ -131,7 +131,7 @@ actor CoreMIDIChannel: Channel {
             }
             let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendCC(channel: channel, controller: controller, value: value)
-            return .success("CC \(controller)=\(value) on ch \(channel)")
+            return .unverified("CC \(controller)=\(value) sent to the virtual MIDI port; Logic delivery is not verified")
 
         // MARK: - Program Change
 
@@ -141,7 +141,7 @@ actor CoreMIDIChannel: Channel {
             }
             let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendProgramChange(channel: channel, program: program)
-            return .success("Program change \(program) on ch \(channel)")
+            return .unverified("Program change \(program) sent to the virtual MIDI port; Logic delivery is not verified")
 
         // MARK: - Pitch Bend
 
@@ -151,7 +151,7 @@ actor CoreMIDIChannel: Channel {
             }
             let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendPitchBend(channel: channel, value: value)
-            return .success("Pitch bend \(value) on ch \(channel)")
+            return .unverified("Pitch bend \(value) sent to the virtual MIDI port; Logic delivery is not verified")
 
         case "midi.send_pitch_bend":
             guard let value = Self.parseSignedPitchBend(params["value"]) else {
@@ -159,7 +159,7 @@ actor CoreMIDIChannel: Channel {
             }
             let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendPitchBend(channel: channel, value: value)
-            return .success("Pitch bend \(value) on ch \(channel)")
+            return .unverified("Pitch bend \(value) sent to the virtual MIDI port; Logic delivery is not verified")
 
         // MARK: - Aftertouch
 
@@ -169,7 +169,7 @@ actor CoreMIDIChannel: Channel {
             }
             let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendAftertouch(channel: channel, pressure: pressure)
-            return .success("Aftertouch \(pressure) on ch \(channel)")
+            return .unverified("Aftertouch \(pressure) sent to the virtual MIDI port; Logic delivery is not verified")
 
         // MARK: - Raw SysEx
 
@@ -188,7 +188,10 @@ actor CoreMIDIChannel: Channel {
                 return .error("SysEx must start with F0 and end with F7")
             }
             await engine.sendSysEx(bytes)
-            return .success("SysEx sent (\(bytes.count) bytes)")
+            return .unverified("SysEx sent to the virtual MIDI port (\(bytes.count) bytes); Logic delivery is not verified")
+
+        case "midi.list_ports":
+            return .success(await engine.portListJSON())
 
         case "midi.create_virtual_port":
             let name = params["name"] ?? "LogicProMCP-Virtual"

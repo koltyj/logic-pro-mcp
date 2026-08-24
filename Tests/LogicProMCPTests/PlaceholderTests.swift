@@ -1,8 +1,21 @@
 import XCTest
+@testable import LogicProMCP
 
 final class PlaceholderTests: XCTestCase {
-    func testBinaryExists() throws {
-        // Placeholder — real tests require Logic Pro to be running
-        XCTAssertTrue(true)
+    func testAutomationPermissionStatus() {
+        let granted = PermissionChecker.PermissionStatus(
+            accessibility: true,
+            automation: .granted
+        )
+        XCTAssertTrue(granted.automationLogicPro)
+        XCTAssertTrue(granted.allGranted)
+
+        let denied = PermissionChecker.PermissionStatus(
+            accessibility: true,
+            automation: .denied
+        )
+        XCTAssertFalse(denied.automationLogicPro)
+        XCTAssertFalse(denied.allGranted)
+        XCTAssertTrue(denied.summary.contains("Automation (Logic Pro): NOT GRANTED (denied)"))
     }
 }

@@ -90,6 +90,26 @@ actor MIDIEngine {
 
     var isActive: Bool { isRunning && client != 0 }
 
+    func portListJSON() -> String {
+        let sources = (0..<MIDIGetNumberOfSources()).compactMap { endpointName(MIDIGetSource($0)) }
+        let destinations = (0..<MIDIGetNumberOfDestinations()).compactMap { endpointName(MIDIGetDestination($0)) }
+        let data = try? JSONSerialization.data(withJSONObject: [
+            "sources": sources,
+            "destinations": destinations,
+        ])
+        return data.flatMap { String(data: $0, encoding: .utf8) }
+            ?? "{\"sources\":[],\"destinations\":[]}"
+    }
+
+    private func endpointName(_ endpoint: MIDIEndpointRef) -> String? {
+        guard endpoint != 0 else { return nil }
+        var value: Unmanaged<CFString>?
+        guard MIDIObjectGetStringProperty(endpoint, kMIDIPropertyDisplayName, &value) == noErr else {
+            return nil
+        }
+        return value?.takeRetainedValue() as String?
+    }
+
     /// Create an additional virtual source/destination pair.
     func createVirtualPort(named name: String) throws {
         if !isRunning {

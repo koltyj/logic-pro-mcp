@@ -66,7 +66,6 @@ actor ChannelRouter {
         "midi.send_aftertouch":       [.coreMIDI],
         "midi.send_sysex":            [.coreMIDI],
         "midi.list_ports":            [.coreMIDI],
-        "midi.get_input_state":       [.coreMIDI],
         "midi.create_virtual_port":   [.coreMIDI],
 
         // MMC
@@ -202,6 +201,9 @@ actor ChannelRouter {
             switch result {
             case .success:
                 Log.debug("\(operation) succeeded via \(channelID.rawValue)", subsystem: "router")
+                return result
+            case .unverified:
+                Log.debug("\(operation) was sent via \(channelID.rawValue) without Logic readback", subsystem: "router")
                 return result
             case .error(let msg):
                 Log.debug("\(operation) failed via \(channelID.rawValue): \(msg), trying next", subsystem: "router")

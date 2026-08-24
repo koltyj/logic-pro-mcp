@@ -3,6 +3,7 @@ import Foundation
 /// Result of a channel operation.
 enum ChannelResult: Sendable {
     case success(String)
+    case unverified(String)
     case error(String)
 
     var isSuccess: Bool {
@@ -13,6 +14,7 @@ enum ChannelResult: Sendable {
     var message: String {
         switch self {
         case .success(let msg): return msg
+        case .unverified(let msg): return msg
         case .error(let msg): return msg
         }
     }

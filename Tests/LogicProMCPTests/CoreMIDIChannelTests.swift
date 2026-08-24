@@ -16,16 +16,29 @@ final class CoreMIDIChannelTests: XCTestCase {
             ("midi.send_aftertouch", ["pressure": "64", "channel": "1"]),
             ("midi.send_sysex", ["data": "F0 7F 7F 06 02 F7"]),
             ("midi.send_sysex", ["bytes": "F0 7F 7F 06 02 F7"]),
-            ("midi.create_virtual_port", ["name": "Test Port"]),
         ]
 
         for testCase in cases {
             let result = await channel.execute(operation: testCase.operation, params: testCase.params)
-            XCTAssertTrue(
-                result.isSuccess,
-                "\(testCase.operation) should be handled, got: \(result.message)"
-            )
+            guard case .unverified = result else {
+                return XCTFail("\(testCase.operation) should be unverified, got: \(result.message)")
+            }
         }
+
+        let ports = await channel.execute(operation: "midi.list_ports", params: [:])
+        guard case .success(let json) = ports,
+              let data = json.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: [String]] else {
+            return XCTFail("midi.list_ports should return JSON")
+        }
+        XCTAssertNotNil(object["sources"])
+        XCTAssertNotNil(object["destinations"])
+
+        let virtualPort = await channel.execute(
+            operation: "midi.create_virtual_port",
+            params: ["name": "Test Port"]
+        )
+        XCTAssertTrue(virtualPort.isSuccess)
 
         await channel.stop()
     }
@@ -39,7 +52,9 @@ final class CoreMIDIChannelTests: XCTestCase {
             params: ["value": "0", "channel": "1"]
         )
 
-        XCTAssertTrue(result.isSuccess, "midi.pitch_bend should keep accepting raw 14-bit values")
+        guard case .unverified = result else {
+            return XCTFail("midi.pitch_bend should be accepted as unverified")
+        }
 
         await channel.stop()
     }
@@ -60,10 +75,9 @@ final class CoreMIDIChannelTests: XCTestCase {
 
         for testCase in cases {
             let result = await channel.execute(operation: testCase.operation, params: testCase.params)
-            XCTAssertTrue(
-                result.isSuccess,
-                "\(testCase.operation) should be handled, got: \(result.message)"
-            )
+            guard case .unverified = result else {
+                return XCTFail("\(testCase.operation) should be unverified, got: \(result.message)")
+            }
         }
 
         await channel.stop()
