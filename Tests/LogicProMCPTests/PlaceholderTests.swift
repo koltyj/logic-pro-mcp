@@ -18,4 +18,10 @@ final class PlaceholderTests: XCTestCase {
         XCTAssertFalse(denied.allGranted)
         XCTAssertTrue(denied.summary.contains("Automation (Logic Pro): NOT GRANTED (denied)"))
     }
+
+    func testUnverifiedDeliveryIsAcceptedWithoutClaimingVerification() {
+        let result = ChannelResult.unverified("sent, not verified")
+        XCTAssertTrue(result.isSuccess)
+        XCTAssertEqual(result.message, "sent, not verified")
+    }
 }

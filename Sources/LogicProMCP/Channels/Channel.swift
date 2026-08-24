@@ -6,9 +6,10 @@ enum ChannelResult: Sendable {
     case unverified(String)
     case error(String)
 
+    /// True when the channel accepted the operation, even if Logic cannot confirm the outcome.
     var isSuccess: Bool {
-        if case .success = self { return true }
-        return false
+        if case .error = self { return false }
+        return true
     }
 
     var message: String {

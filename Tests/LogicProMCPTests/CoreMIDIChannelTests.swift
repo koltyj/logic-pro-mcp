@@ -31,8 +31,8 @@ final class CoreMIDIChannelTests: XCTestCase {
               let object = try JSONSerialization.jsonObject(with: data) as? [String: [String]] else {
             return XCTFail("midi.list_ports should return JSON")
         }
-        XCTAssertNotNil(object["sources"])
-        XCTAssertNotNil(object["destinations"])
+        XCTAssertTrue(object["sources"]?.contains(ServerConfig.virtualMIDISourceName) == true)
+        XCTAssertTrue(object["destinations"]?.contains(ServerConfig.virtualMIDISinkName) == true)
 
         let virtualPort = await channel.execute(
             operation: "midi.create_virtual_port",
@@ -100,12 +100,19 @@ final class CoreMIDIChannelTests: XCTestCase {
 
         for testCase in cases {
             let result = await channel.execute(operation: testCase.operation, params: testCase.params)
-            XCTAssertFalse(
-                result.isSuccess,
-                "\(testCase.operation) should reject malformed params, got: \(result.message)"
-            )
+            guard case .error = result else {
+                return XCTFail("\(testCase.operation) should reject malformed params, got: \(result.message)")
+            }
         }
 
         await channel.stop()
+    }
+
+    func testCoreMIDIReportsDroppedMessages() async {
+        let channel = CoreMIDIChannel(engine: MIDIEngine())
+        let result = await channel.execute(operation: "mmc.play", params: [:])
+        guard case .error = result else {
+            return XCTFail("A stopped MIDI engine must report an error")
+        }
     }
 }

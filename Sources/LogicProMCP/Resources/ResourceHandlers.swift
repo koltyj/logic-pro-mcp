@@ -90,8 +90,11 @@ struct ResourceHandlers {
 
     private static func readMIDIPorts(router: ChannelRouter, uri: String) async throws -> ReadResource.Result {
         let result = await router.route(operation: "midi.list_ports")
+        guard case .success(let json) = result else {
+            throw MCPError.internalError("Could not list MIDI ports: \(result.message)")
+        }
         return ReadResource.Result(
-            contents: [.text(result.message, uri: uri, mimeType: "application/json")]
+            contents: [.text(json, uri: uri, mimeType: "application/json")]
         )
     }
 
