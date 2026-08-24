@@ -46,7 +46,7 @@ actor StatePoller {
             let interval: PollInterval = Self.intervalForIdleTime(idle)
 
             // Always poll transport (it changes most frequently)
-            await pollTransport(axChannel: axChannel, cache: cache)
+            let transport = await pollTransport(axChannel: axChannel, cache: cache)
             transportCounter += 1
 
             // Poll tracks/mixer less frequently.
@@ -61,7 +61,23 @@ actor StatePoller {
             }
 
             if shouldPollTracks {
-                await pollTracks(axChannel: axChannel, cache: cache)
+                let freshTrackCount = await pollTracks(axChannel: axChannel, cache: cache)
+                await pollMixer(axChannel: axChannel, cache: cache)
+                // Only refresh the project when the track read in this same
+                // pass succeeded. Reading the cache instead would pair a newly
+                // opened project's name with the previous project's track
+                // count across a close/open.
+                // Publish project state only when every field in it came from
+                // this pass. A stale tempo or sample rate would otherwise be
+                // attached to a freshly read project name.
+                if let freshTrackCount, let transport {
+                    await pollProject(
+                        axChannel: axChannel,
+                        cache: cache,
+                        trackCount: freshTrackCount,
+                        transport: transport
+                    )
+                }
             }
 
             // Sleep until next poll
@@ -78,37 +94,95 @@ actor StatePoller {
 
     // MARK: - Individual pollers
 
-    private func pollTransport(axChannel: AccessibilityChannel, cache: StateCache) async {
+    /// Refresh the transport cache. Returns the state read in this cycle, or
+    /// nil if the read failed — callers must not fall back to the cached value,
+    /// which may predate a project change.
+    private func pollTransport(
+        axChannel: AccessibilityChannel, cache: StateCache
+    ) async -> TransportState? {
         let result = await axChannel.execute(operation: "transport.get_state", params: [:])
         guard case .success(let json) = result else {
             Log.debug("Transport poll failed: \(result.message)", subsystem: "poller")
-            return
+            return nil
         }
-        guard let data = json.data(using: .utf8) else { return }
+        guard let data = json.data(using: .utf8) else { return nil }
         do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let state = try decoder.decode(TransportState.self, from: data)
             await cache.updateTransport(state)
+            return state
         } catch {
             Log.debug("Transport decode failed: \(error)", subsystem: "poller")
+            return nil
         }
     }
 
-    private func pollTracks(axChannel: AccessibilityChannel, cache: StateCache) async {
+    /// Refresh the track cache. Returns the number of tracks read, or nil if
+    /// the read failed — callers must not substitute the cached count, which may
+    /// belong to a previously open project.
+    private func pollTracks(axChannel: AccessibilityChannel, cache: StateCache) async -> Int? {
         let result = await axChannel.execute(operation: "track.get_tracks", params: [:])
         guard case .success(let json) = result else {
             Log.debug("Tracks poll failed: \(result.message)", subsystem: "poller")
+            return nil
+        }
+        guard let data = json.data(using: .utf8) else { return nil }
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let tracks = try decoder.decode([TrackState].self, from: data)
+            await cache.updateTracks(tracks)
+            return tracks.count
+        } catch {
+            Log.debug("Tracks decode failed: \(error)", subsystem: "poller")
+            return nil
+        }
+    }
+
+    private func pollMixer(axChannel: AccessibilityChannel, cache: StateCache) async {
+        let result = await axChannel.execute(operation: "mixer.get_state", params: [:])
+        guard case .success(let json) = result else {
+            // Expected whenever the Mixer pane is hidden — AX can only read visible UI.
+            Log.debug("Mixer poll failed: \(result.message)", subsystem: "poller")
             return
         }
         guard let data = json.data(using: .utf8) else { return }
         do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            let tracks = try decoder.decode([TrackState].self, from: data)
-            await cache.updateTracks(tracks)
+            let strips = try decoder.decode([ChannelStripState].self, from: data)
+            await cache.updateChannelStrips(strips)
         } catch {
-            Log.debug("Tracks decode failed: \(error)", subsystem: "poller")
+            Log.debug("Mixer decode failed: \(error)", subsystem: "poller")
+        }
+    }
+
+    private func pollProject(
+        axChannel: AccessibilityChannel,
+        cache: StateCache,
+        trackCount: Int,
+        transport: TransportState
+    ) async {
+        let result = await axChannel.execute(operation: "project.get_info", params: [:])
+        guard case .success(let json) = result else {
+            Log.debug("Project poll failed: \(result.message)", subsystem: "poller")
+            return
+        }
+        guard let data = json.data(using: .utf8) else { return }
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var info = try decoder.decode(ProjectInfo.self, from: data)
+            // project.get_info reads the window title only. Fill the remaining
+            // fields from this same pass, so the resource reports a coherent
+            // snapshot instead of struct defaults.
+            info.trackCount = trackCount
+            info.tempo = transport.tempo
+            info.sampleRate = transport.sampleRate
+            await cache.updateProject(info)
+        } catch {
+            Log.debug("Project decode failed: \(error)", subsystem: "poller")
         }
     }
 

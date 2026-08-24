@@ -41,7 +41,13 @@ enum ProcessUtils {
         logicProApp() != nil
     }
 
-    /// Bring Logic Pro to front (used sparingly — most operations don't need focus).
+    /// Whether Logic Pro is currently the frontmost application.
+    static var isLogicProFrontmost: Bool {
+        logicProApp()?.isActive ?? false
+    }
+
+    /// Bring Logic Pro to front. Required before posting CGEvents: Logic Pro
+    /// silently discards synthetic key events unless it is the active app.
     static func activateLogicPro() -> Bool {
         logicProApp()?.activate() ?? false
     }
