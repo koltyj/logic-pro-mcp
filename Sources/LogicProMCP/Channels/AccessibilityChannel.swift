@@ -10,7 +10,7 @@ actor AccessibilityChannel: Channel {
     func start() async throws {
         // Verify AX trust. If not trusted, the process needs to be added to
         // System Preferences > Privacy & Security > Accessibility.
-        let trusted = AXIsProcessTrusted()
+        let trusted = PermissionChecker.checkAccessibility()
         guard trusted else {
             throw AccessibilityError.notTrusted
         }
@@ -117,7 +117,7 @@ actor AccessibilityChannel: Channel {
     }
 
     func healthCheck() async -> ChannelHealth {
-        guard AXIsProcessTrusted() else {
+        guard PermissionChecker.checkAccessibility() else {
             return .unavailable("Accessibility not trusted — add this process in System Preferences")
         }
         guard ProcessUtils.isLogicProRunning else {
