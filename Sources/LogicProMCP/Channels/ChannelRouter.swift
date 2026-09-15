@@ -51,7 +51,7 @@ actor ChannelRouter {
         "mixer.set_output":           [.accessibility],
         "mixer.set_input":            [.accessibility],
         "mixer.get_channel_strip":    [.accessibility],
-        "mixer.set_master_volume":    [.osc, .accessibility],
+        "mixer.set_master_volume":    [.accessibility],
         "mixer.set_output_volume":    [.osc, .accessibility],
         "mixer.get_bus_routing":      [.accessibility],
         "mixer.toggle_eq":            [.accessibility],
