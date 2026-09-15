@@ -333,7 +333,9 @@ actor AccessibilityChannel: Channel {
         guard let slider = AXLogicProElements.findMasterFader() else {
             return .error("Cannot find master volume control")
         }
-        AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: value))
+        guard AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: value)) else {
+            return .error("Failed to set master volume control")
+        }
         return .success("{\"master_volume\":\(value)}")
     }
 

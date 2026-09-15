@@ -172,17 +172,23 @@ enum AXLogicProElements {
     static func findMasterFader() -> AXUIElement? {
         let strips = mixerStrips()
         let descriptions = strips.map { AXHelpers.getDescription($0) }
-        guard let index = masterStripIndex(descriptions: descriptions) else { return nil }
-        return stripControl(strips[index], role: kAXSliderRole, description: StripControl.volume)
-    }
-
-    static func masterStripIndex(descriptions: [String?]) -> Int? {
-        func index(containing needle: String) -> Int? {
-            descriptions.firstIndex {
-                $0?.localizedCaseInsensitiveContains(needle) == true
+        for index in masterStripCandidateIndices(descriptions: descriptions) {
+            if let fader = stripControl(
+                strips[index], role: kAXSliderRole, description: StripControl.volume
+            ) {
+                return fader
             }
         }
-        return index(containing: "master") ?? index(containing: "stereo out")
+        return nil
+    }
+
+    static func masterStripCandidateIndices(descriptions: [String?]) -> [Int] {
+        func indices(containing needle: String) -> [Int] {
+            descriptions.indices.filter {
+                descriptions[$0]?.localizedCaseInsensitiveContains(needle) == true
+            }
+        }
+        return indices(containing: "master") + indices(containing: "stereo out")
     }
 
     // MARK: - Menu Bar

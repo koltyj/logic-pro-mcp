@@ -57,16 +57,50 @@ final class MixerDispatcherTests: XCTestCase {
         XCTAssertEqual(call?.params, ["value": "0.6"])
     }
 
-    func testMasterStripPrefersMasterAndFallsBackToStereoOut() {
+    func testMasterStripCandidatesPreferMasterThenStereoOut() {
         XCTAssertEqual(
-            AXLogicProElements.masterStripIndex(descriptions: ["Audio 1", "Stereo Out", "Master"]),
-            2
+            AXLogicProElements.masterStripCandidateIndices(
+                descriptions: ["Audio 1", "Stereo Out", "Master"]
+            ),
+            [2, 1]
         )
         XCTAssertEqual(
-            AXLogicProElements.masterStripIndex(descriptions: ["Audio 1", "Stereo Out"]),
-            1
+            AXLogicProElements.masterStripCandidateIndices(descriptions: ["Audio 1", "Stereo Out"]),
+            [1]
         )
-        XCTAssertNil(AXLogicProElements.masterStripIndex(descriptions: ["Audio 1", "Aux 1"]))
+        XCTAssertEqual(
+            AXLogicProElements.masterStripCandidateIndices(descriptions: ["Audio 1", "Aux 1"]),
+            []
+        )
+    }
+
+    func testMalformedMixerValuesAreRejectedBeforeRouting() async {
+        let cases: [(command: String, params: [String: Value])] = [
+            ("set_volume", ["value": .double(0.5)]),
+            ("set_pan", ["track": .int(1), "value": .double(2)]),
+            ("set_master_volume", ["value": .string("loud")]),
+        ]
+
+        for testCase in cases {
+            let osc = CapturingMixerChannel(id: .osc)
+            let accessibility = CapturingMixerChannel(id: .accessibility)
+            let router = ChannelRouter()
+            await router.register(osc)
+            await router.register(accessibility)
+
+            let result = await MixerDispatcher.handle(
+                command: testCase.command,
+                params: testCase.params,
+                router: router,
+                cache: StateCache()
+            )
+
+            XCTAssertTrue(result.isError == true)
+            let oscCall = await osc.lastCall
+            let accessibilityCall = await accessibility.lastCall
+            XCTAssertNil(oscCall)
+            XCTAssertNil(accessibilityCall)
+        }
     }
 }
 

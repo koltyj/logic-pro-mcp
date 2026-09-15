@@ -44,8 +44,16 @@ struct MixerDispatcher {
     ) async -> CallTool.Result {
         switch command {
         case "set_volume":
-            let track = params["track"]?.intValue ?? params["index"]?.intValue ?? 0
-            let value = params["value"]?.doubleValue ?? params["volume"]?.doubleValue ?? 0.0
+            let track: Int
+            let value: Double
+            switch InputValidation.int(params, keys: ["track", "index"], range: 0...999_999, label: "track") {
+            case .success(let parsed): track = parsed
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.double(params, keys: ["value", "volume"], range: 0...1, label: "value") {
+            case .success(let parsed): value = parsed
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "mixer.set_volume",
                 params: ["track": String(track), "value": String(value)]
@@ -53,8 +61,16 @@ struct MixerDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_pan":
-            let track = params["track"]?.intValue ?? params["index"]?.intValue ?? 0
-            let value = params["value"]?.doubleValue ?? params["pan"]?.doubleValue ?? 0.0
+            let track: Int
+            let value: Double
+            switch InputValidation.int(params, keys: ["track", "index"], range: 0...999_999, label: "track") {
+            case .success(let parsed): track = parsed
+            case .failure(let message): return error(message)
+            }
+            switch InputValidation.double(params, keys: ["value", "pan"], range: -1...1, label: "value") {
+            case .success(let parsed): value = parsed
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "mixer.set_pan",
                 params: ["track": String(track), "value": String(value)]
@@ -90,7 +106,11 @@ struct MixerDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_master_volume":
-            let value = params["value"]?.doubleValue ?? params["volume"]?.doubleValue ?? 0.0
+            let value: Double
+            switch InputValidation.double(params, keys: ["value", "volume"], range: 0...1, label: "value") {
+            case .success(let parsed): value = parsed
+            case .failure(let message): return error(message)
+            }
             let result = await router.route(
                 operation: "mixer.set_master_volume",
                 params: ["value": String(value)]
@@ -139,5 +159,9 @@ struct MixerDispatcher {
                 isError: true
             )
         }
+    }
+
+    private static func error(_ message: String) -> CallTool.Result {
+        CallTool.Result(content: [.text(message)], isError: true)
     }
 }
