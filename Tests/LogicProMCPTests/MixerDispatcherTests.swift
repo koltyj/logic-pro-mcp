@@ -72,6 +72,12 @@ final class MixerDispatcherTests: XCTestCase {
             AXLogicProElements.masterStripCandidateIndices(descriptions: ["Audio 1", "Aux 1"]),
             []
         )
+        XCTAssertEqual(
+            AXLogicProElements.masterStripCandidateIndices(
+                descriptions: ["Master Bus", " stereo out\n", "MASTER"]
+            ),
+            [2, 1]
+        )
     }
 
     func testMalformedMixerValuesAreRejectedBeforeRouting() async {

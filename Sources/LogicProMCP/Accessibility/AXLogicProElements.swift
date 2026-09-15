@@ -183,12 +183,14 @@ enum AXLogicProElements {
     }
 
     static func masterStripCandidateIndices(descriptions: [String?]) -> [Int] {
-        func indices(containing needle: String) -> [Int] {
+        func indices(matching expectedDescription: String) -> [Int] {
             descriptions.indices.filter {
-                descriptions[$0]?.localizedCaseInsensitiveContains(needle) == true
+                descriptions[$0]?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .localizedCaseInsensitiveCompare(expectedDescription) == .orderedSame
             }
         }
-        return indices(containing: "master") + indices(containing: "stereo out")
+        return indices(matching: "Master") + indices(matching: "Stereo Out")
     }
 
     // MARK: - Menu Bar
