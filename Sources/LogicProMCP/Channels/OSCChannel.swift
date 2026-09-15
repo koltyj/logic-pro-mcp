@@ -29,16 +29,16 @@ actor OSCChannel: Channel {
 
         case "mixer.set_volume":
             guard let track = params["track"].flatMap(Int.init),
-                  let volume = params["volume"].flatMap(Float.init) else {
-                return .error("set_volume requires 'track' (int) and 'volume' (float 0.0-1.0)")
+                  let volume = params["value"].flatMap(Float.init) else {
+                return .error("set_volume requires 'track' (int) and 'value' (float 0.0-1.0)")
             }
             let msg = OSCMessage(address: "/track/\(track)/volume", arguments: [.float(volume)])
             return await send(msg, description: "Set track \(track) volume to \(volume)")
 
         case "mixer.set_pan":
             guard let track = params["track"].flatMap(Int.init),
-                  let pan = params["pan"].flatMap(Float.init) else {
-                return .error("set_pan requires 'track' (int) and 'pan' (float -1.0 to 1.0)")
+                  let pan = params["value"].flatMap(Float.init) else {
+                return .error("set_pan requires 'track' (int) and 'value' (float -1.0 to 1.0)")
             }
             let msg = OSCMessage(address: "/track/\(track)/pan", arguments: [.float(pan)])
             return await send(msg, description: "Set track \(track) pan to \(pan)")

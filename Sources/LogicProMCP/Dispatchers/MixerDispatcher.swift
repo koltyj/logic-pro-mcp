@@ -48,7 +48,7 @@ struct MixerDispatcher {
             let value = params["value"]?.doubleValue ?? params["volume"]?.doubleValue ?? 0.0
             let result = await router.route(
                 operation: "mixer.set_volume",
-                params: ["index": String(track), "volume": String(value)]
+                params: ["track": String(track), "value": String(value)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
@@ -57,7 +57,7 @@ struct MixerDispatcher {
             let value = params["value"]?.doubleValue ?? params["pan"]?.doubleValue ?? 0.0
             let result = await router.route(
                 operation: "mixer.set_pan",
-                params: ["index": String(track), "pan": String(value)]
+                params: ["track": String(track), "value": String(value)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
@@ -93,7 +93,7 @@ struct MixerDispatcher {
             let value = params["value"]?.doubleValue ?? params["volume"]?.doubleValue ?? 0.0
             let result = await router.route(
                 operation: "mixer.set_master_volume",
-                params: ["volume": String(value)]
+                params: ["value": String(value)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 

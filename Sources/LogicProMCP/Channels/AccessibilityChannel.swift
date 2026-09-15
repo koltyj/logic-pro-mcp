@@ -76,6 +76,8 @@ actor AccessibilityChannel: Channel {
             return setMixerValue(params: params, target: .volume)
         case "mixer.set_pan":
             return setMixerValue(params: params, target: .pan)
+        case "mixer.set_master_volume":
+            return setMasterVolume(params: params)
         case "mixer.set_send":
             return .error("Send adjustment not yet implemented via AX")
         case "mixer.set_input", "mixer.set_output":
@@ -305,9 +307,9 @@ actor AccessibilityChannel: Channel {
     }
 
     private func setMixerValue(params: [String: String], target: MixerTarget) -> ChannelResult {
-        guard let indexStr = params["index"], let index = Int(indexStr),
+        guard let indexStr = params["track"], let index = Int(indexStr),
               let valueStr = params["value"], let value = Double(valueStr) else {
-            return .error("Missing 'index' or 'value' parameter")
+            return .error("Missing 'track' or 'value' parameter")
         }
         let element: AXUIElement?
         switch target {
@@ -322,6 +324,17 @@ actor AccessibilityChannel: Channel {
         AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: value))
         let label = target == .volume ? "volume" : "pan"
         return .success("{\"\(label)\":\(value),\"track\":\(index)}")
+    }
+
+    private func setMasterVolume(params: [String: String]) -> ChannelResult {
+        guard let valueStr = params["value"], let value = Double(valueStr) else {
+            return .error("Missing or invalid 'value' parameter")
+        }
+        guard let slider = AXLogicProElements.findMasterFader() else {
+            return .error("Cannot find master volume control")
+        }
+        AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: value))
+        return .success("{\"master_volume\":\(value)}")
     }
 
     // MARK: - Project
