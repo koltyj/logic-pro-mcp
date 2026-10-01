@@ -66,7 +66,8 @@ actor AppleScriptChannel: Channel {
         // NSAppleScript must run on the main thread-ish context, but within
         // an actor we are already serialized. The actual execution is synchronous.
         var errorDict: NSDictionary?
-        let script = NSAppleScript(source: source)
+        // Logic answers no Apple Events while a dialog is open; without a limit a script blocks for minutes.
+        let script = NSAppleScript(source: "with timeout of 5 seconds\n\(source)\nend timeout")
         let result = script?.executeAndReturnError(&errorDict)
 
         if let error = errorDict {

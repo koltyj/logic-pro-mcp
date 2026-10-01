@@ -7,6 +7,12 @@ import Foundation
 /// each fallback in order.
 actor ChannelRouter {
     private var channels: [ChannelID: any Channel] = [:]
+    private var dialogProbe: (@Sendable () async -> String?)?
+
+    /// Installs the check run before every state-changing operation.
+    func setDialogProbe(_ probe: @escaping @Sendable () async -> String?) {
+        dialogProbe = probe
+    }
 
     /// Static routing table: operation → ordered list of channels to try.
     /// Operations are prefixed by category (e.g., "transport.play", "track.mute").
@@ -102,10 +108,10 @@ actor ChannelRouter {
 
         // Project — AppleScript for lifecycle, keyboard for save/bounce
         "project.new":                [.appleScript],
-        "project.open":               [.appleScript],
+        "project.open":               [.accessibility],
         "project.save":               [.accessibility, .cgEvent, .appleScript],
         "project.save_as":            [.appleScript],
-        "project.close":              [.cgEvent, .appleScript],
+        "project.close":              [.accessibility],
         "project.get_info":           [.accessibility],
         "project.bounce":             [.cgEvent, .accessibility],
         "project.is_running":         [],  // No channel needed — pure process check
@@ -139,6 +145,9 @@ actor ChannelRouter {
         "automation.get_parameter":   [.accessibility],
 
         // System — no channel needed
+        "dialog.state":               [.accessibility],
+        "dialog.respond":             [.accessibility],
+
         "system.health":              [],
         "system.cache_state":         [],
         "system.refresh":             [],
@@ -175,6 +184,12 @@ actor ChannelRouter {
     func route(operation: String, params: [String: String] = [:]) async -> ChannelResult {
         guard let chain = Self.routingTable[operation] else {
             return .error("Unknown operation: \(operation)")
+        }
+
+        // Logic ignores (or queues) input behind a modal dialog, so fail fast with what it's asking.
+        let isRead = operation.contains(".get_") || operation.hasPrefix("dialog.")
+        if !isRead, !chain.isEmpty, let dialogProbe, let dialog = await dialogProbe() {
+            return .error("Blocked by Logic dialog: \(dialog). Answer it with logic_system dialog_respond {button}.")
         }
 
         // Operations with empty chain don't need a channel

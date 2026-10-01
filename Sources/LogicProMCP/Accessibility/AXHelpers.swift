@@ -5,8 +5,12 @@ import Foundation
 /// All functions are synchronous; they block briefly while the AX subsystem responds.
 enum AXHelpers {
     /// Create an AXUIElement reference for a running application by PID.
+    /// Calls time out after 1s instead of the multi-second default: while Logic shows a
+    /// modal dialog every AX call blocks, and polling loops would otherwise stall for minutes.
     static func axApp(pid: pid_t) -> AXUIElement {
-        AXUIElementCreateApplication(pid)
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0)
+        return app
     }
 
     /// Get a typed attribute value from an AX element.

@@ -96,8 +96,16 @@ actor AccessibilityChannel: Channel {
             return .error("Marker renaming not yet implemented via AX")
 
         // MARK: - Project
+        case "dialog.state":
+            return .success(AXLogicProElements.openDialogSummary() ?? "{\"open\":false}")
+        case "dialog.respond":
+            return respondToDialog(params: params)
         case "project.save":
             return saveProject()
+        case "project.open":
+            return openProject(params: params)
+        case "project.close":
+            return closeProject()
         case "project.get_info":
             return getProjectInfo()
 
@@ -336,6 +344,77 @@ actor AccessibilityChannel: Channel {
             return .error("Pressed File › Save but \(project.lastPathComponent) was not written; a dialog may be open")
         }
         return .success("{\"saved\":\"\(project.path)\"}")
+    }
+
+    private func respondToDialog(params: [String: String]) -> ChannelResult {
+        guard let title = params["button"] else { return .error("Missing 'button' parameter") }
+        guard let dialog = AXLogicProElements.openDialog() else { return .error("No Logic dialog is open") }
+        let buttons = AXHelpers.findAllDescendants(of: dialog, role: kAXButtonRole, maxDepth: 4)
+        guard let button = buttons.first(where: { AXHelpers.getTitle($0) == title }) else {
+            let titles = buttons.compactMap { AXHelpers.getTitle($0) }.filter { !$0.isEmpty }
+            return .error("No button '\(title)'. Buttons: \(titles.joined(separator: ", "))")
+        }
+        guard AXHelpers.performAction(button, kAXPressAction) else { return .error("Failed to press '\(title)'") }
+        let next = AXHelpers.poll(attempts: 10, interval: 100_000) { () -> String? in
+            guard let open = AXLogicProElements.openDialog() else { return "" }
+            return CFEqual(open, dialog) ? nil : (AXLogicProElements.openDialogSummary() ?? "")
+        }
+        switch next {
+        case .none: return .error("Pressed '\(title)' but the dialog is still open")
+        case .some(""): return .success("{\"pressed\":\"\(title)\"}")
+        case .some(let following): return .success("Pressed '\(title)'. Logic now asks: \(following)")
+        }
+    }
+
+    private func openProject(params: [String: String]) -> ChannelResult {
+        guard let path = params["path"] else { return .error("Missing 'path' parameter") }
+        let target = URL(fileURLWithPath: path).standardizedFileURL.path
+        if AXLogicProElements.openProjectPaths().contains(target) {
+            return .success("{\"opened\":\"\(target)\",\"already\":true}")
+        }
+        // `open` returns immediately; AppleScript's open blocks while Logic shows a dialog.
+        let launcher = Process()
+        launcher.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        launcher.arguments = ["-a", "Logic Pro", target]
+        do {
+            try launcher.run()
+            launcher.waitUntilExit()
+        } catch {
+            return .error("Failed to open \(target): \(error.localizedDescription)")
+        }
+        // Stop waiting as soon as Logic asks something (missing files, MIDI ports, ...).
+        let outcome = AXHelpers.poll(attempts: 150, interval: 100_000) { () -> String? in
+            if AXLogicProElements.openProjectPaths().contains(target) { return "" }
+            return AXLogicProElements.openDialogSummary()
+        }
+        guard let outcome else {
+            return .error("\(target) did not open within 15s")
+        }
+        guard outcome.isEmpty else {
+            return .error("Opening \(target) is waiting on a Logic dialog: \(outcome)")
+        }
+        return .success("{\"opened\":\"\(target)\"}")
+    }
+
+    private func closeProject() -> ChannelResult {
+        guard let project = AXLogicProElements.openProjectURL()?.path else {
+            return .error("No project is open")
+        }
+        guard let item = AXLogicProElements.menuItem(path: ["File", "Close Project"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press File › Close Project")
+        }
+        let outcome = AXHelpers.poll(attempts: 30, interval: 100_000) { () -> String? in
+            if !AXLogicProElements.openProjectPaths().contains(project) { return "" }
+            return AXLogicProElements.openDialogSummary()
+        }
+        guard let outcome else {
+            return .error("\(project) is still open after 3s")
+        }
+        guard outcome.isEmpty else {
+            return .error("Closing \(project) is waiting on a Logic dialog: \(outcome)")
+        }
+        return .success("{\"closed\":\"\(project)\"}")
     }
 
     /// Newest modification date among the project's ProjectData files.

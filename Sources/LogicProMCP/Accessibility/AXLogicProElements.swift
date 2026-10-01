@@ -24,6 +24,35 @@ enum AXLogicProElements {
         return URL(string: document)
     }
 
+    /// File paths of the projects open in Logic's windows.
+    static func openProjectPaths() -> [String] {
+        guard let app = appRoot() else { return [] }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.compactMap { window in
+            let document: String? = AXHelpers.getAttribute(window, kAXDocumentAttribute)
+            return document.flatMap(URL.init(string:))?.path
+        }
+    }
+
+    /// The open Logic dialog window, if any.
+    static func openDialog() -> AXUIElement? {
+        guard let app = appRoot() else { return nil }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.first {
+            (AXHelpers.getAttribute($0, kAXSubroleAttribute) as String?) == kAXDialogSubrole
+        }
+    }
+
+    /// Text and buttons of an open Logic dialog window, if any.
+    static func openDialogSummary() -> String? {
+        guard let dialog = openDialog() else { return nil }
+        let text = AXHelpers.findAllDescendants(of: dialog, role: kAXStaticTextRole, maxDepth: 4)
+            .compactMap { AXValueExtractors.extractTextValue($0) }
+        let buttons = AXHelpers.findAllDescendants(of: dialog, role: kAXButtonRole, maxDepth: 4)
+            .compactMap { AXHelpers.getTitle($0) }.filter { !$0.isEmpty }
+        return "\(text.joined(separator: " ")) [buttons: \(buttons.joined(separator: ", "))]"
+    }
+
     // MARK: - Transport
 
     /// Find the transport bar area (toolbar/group containing play, stop, record, etc.)
