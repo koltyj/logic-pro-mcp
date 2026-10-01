@@ -38,8 +38,18 @@ enum AXLogicProElements {
     static func openDialog() -> AXUIElement? {
         guard let app = appRoot() else { return nil }
         let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
-        return windows.first {
-            (AXHelpers.getAttribute($0, kAXSubroleAttribute) as String?) == kAXDialogSubrole
+        return windows.first { window in
+            switch AXHelpers.getAttribute(window, kAXSubroleAttribute) as String? {
+            case kAXDialogSubrole?:
+                return true
+            case kAXFloatingWindowSubrole?:
+                // Logic shows some confirmations (e.g. Clean Up Project) as floating panels.
+                return AXHelpers.getChildren(window).contains {
+                    AXHelpers.getRole($0) == kAXButtonRole && ["OK", "Cancel"].contains(AXHelpers.getTitle($0) ?? "")
+                }
+            default:
+                return false
+            }
         }
     }
 

@@ -87,6 +87,8 @@ actor AccessibilityChannel: Channel {
             return pressEditMenuItem(prefix: "Undo")
         case "edit.redo":
             return pressEditMenuItem(prefix: "Redo")
+        case "region.clear_all":
+            return clearAllRegions()
         case "edit.select_all":
             return pressMenuItem(["Edit", "Select All"])
         case "edit.delete":
@@ -535,6 +537,51 @@ actor AccessibilityChannel: Channel {
             return .error("\(path.joined(separator: " › ")) would have deleted tracks (\(undo)); undone. Select regions first.")
         }
         return .success("{\"pressed\":\"\(path.joined(separator: " › "))\",\"undo\":\"\(undo)\"}")
+    }
+
+    /// Deletes every region via the Tracks area's local Edit menu, which acts on regions
+    /// regardless of keyboard focus. Refuses (and undoes) if Logic deleted tracks instead.
+    private func clearAllRegions() -> ChannelResult {
+        let undoBefore = undoTitle()
+        guard pressTracksAreaMenu(["Edit", "Select", "All"]) else {
+            return .error("Cannot press the Tracks area's Edit › Select › All")
+        }
+        usleep(200_000)
+        guard pressTracksAreaMenu(["Edit", "Delete"]) else {
+            return .error("Cannot press the Tracks area's Edit › Delete (no regions selected?)")
+        }
+        let undo = AXHelpers.poll { () -> String? in
+            guard let title = undoTitle(), title != undoBefore else { return nil }
+            return title
+        }
+        guard let undo else { return .success("{\"cleared\":0,\"note\":\"no regions to delete\"}") }
+        if undo.hasSuffix("Tracks") || undo.hasSuffix("Track") {
+            _ = pressEditMenuItem(prefix: "Undo")
+            return .error("Clearing regions would have deleted tracks (\(undo)); undone")
+        }
+        return .success("{\"cleared\":true,\"undo\":\"\(undo)\"}")
+    }
+
+    /// Opens a menu button in the main window's Tracks area (e.g. its local "Edit") and presses the item at `path`.
+    private func pressTracksAreaMenu(_ path: [String]) -> Bool {
+        guard let window = AXLogicProElements.mainWindow(),
+              let tracks = AXHelpers.findDescendant(of: window, role: kAXGroupRole, description: "Tracks", maxDepth: 6),
+              let button = AXHelpers.findDescendant(of: tracks, role: kAXMenuButtonRole, description: path[0], maxDepth: 4),
+              AXHelpers.performAction(button, kAXPressAction) else { return false }
+        usleep(300_000)
+        var menu: AXUIElement? = AXHelpers.findDescendant(of: button, role: kAXMenuRole, maxDepth: 2)
+        var item: AXUIElement?
+        for title in path.dropFirst() {
+            guard let current = menu,
+                  let next = AXHelpers.getChildren(current).first(where: { AXHelpers.getTitle($0) == title }) else {
+                if let menu { AXHelpers.performAction(menu, kAXCancelAction) }
+                return false
+            }
+            item = next
+            menu = AXHelpers.getChildren(next).first
+        }
+        guard let item, (AXHelpers.getAttribute(item, kAXEnabledAttribute) as Bool?) ?? true else { return false }
+        return AXHelpers.performAction(item, kAXPressAction)
     }
 
     private func undoTitle() -> String? {

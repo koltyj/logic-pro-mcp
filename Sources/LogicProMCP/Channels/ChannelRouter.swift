@@ -127,6 +127,7 @@ actor ChannelRouter {
         "view.toggle_inspector":      [.cgEvent, .accessibility],
 
         // Regions
+        "region.clear_all":           [.accessibility],
         "region.get_regions":         [.accessibility],
         "region.select":              [.accessibility],
         "region.loop":                [.accessibility, .cgEvent],
