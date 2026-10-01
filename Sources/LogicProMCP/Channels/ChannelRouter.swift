@@ -18,17 +18,18 @@ actor ChannelRouter {
     /// Operations are prefixed by category (e.g., "transport.play", "track.mute").
     private static let routingTable: [String: [ChannelID]] = [
         // Transport — MMC via CoreMIDI, fallback to keyboard, then AppleScript
-        "transport.play":             [.coreMIDI, .cgEvent, .appleScript],
-        "transport.stop":             [.coreMIDI, .cgEvent, .appleScript],
-        "transport.record":           [.coreMIDI, .cgEvent, .appleScript],
+        "transport.play":             [.accessibility, .cgEvent],
+        "transport.stop":             [.accessibility, .cgEvent],
+        "transport.record":           [.accessibility, .cgEvent],
         "transport.pause":            [.coreMIDI, .cgEvent, .appleScript],
         "transport.rewind":           [.coreMIDI, .cgEvent],
         "transport.fast_forward":     [.coreMIDI, .cgEvent],
-        "transport.toggle_cycle":     [.cgEvent, .accessibility],
-        "transport.toggle_metronome": [.cgEvent, .accessibility],
-        "transport.set_tempo":        [.osc, .accessibility],
+        "transport.toggle_cycle":     [.accessibility, .cgEvent],
+        "transport.toggle_metronome": [.accessibility, .cgEvent],
+        "transport.toggle_count_in":  [.accessibility],
+        "transport.set_tempo":        [.accessibility, .osc],
         "transport.get_state":        [.accessibility],
-        "transport.goto_position":    [.coreMIDI, .cgEvent],
+        "transport.goto_position":    [.accessibility, .cgEvent],
         "transport.set_cycle_range":  [.accessibility],
 
         // Track state reading

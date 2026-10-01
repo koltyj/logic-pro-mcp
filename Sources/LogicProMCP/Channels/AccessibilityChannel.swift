@@ -36,12 +36,23 @@ actor AccessibilityChannel: Channel {
             return getTransportState()
 
         // MARK: - Transport mutations
+        // Logic 12 has no Stop button: Play toggles, so stop = Play off.
+        case "transport.play":
+            return setTransportButton("Play", to: true)
+        case "transport.stop":
+            return setTransportButton("Play", to: false)
+        case "transport.record":
+            return setTransportButton("Record", to: true, timeout: 60)
         case "transport.toggle_cycle":
             return toggleTransportButton(named: "Cycle")
         case "transport.toggle_metronome":
-            return toggleTransportButton(named: "Metronome")
+            return toggleTransportButton(named: "Metronome Click")
+        case "transport.toggle_count_in":
+            return toggleTransportButton(named: "Count In")
         case "transport.set_tempo":
             return setTempo(params: params)
+        case "transport.goto_position":
+            return gotoBar(params: params)
         case "transport.set_cycle_range":
             return setCycleRange(params: params)
 
@@ -155,33 +166,73 @@ actor AccessibilityChannel: Channel {
     }
 
     private func toggleTransportButton(named name: String) -> ChannelResult {
+        guard let button = AXLogicProElements.findTransportButton(named: name),
+              let current = AXValueExtractors.extractCheckboxState(button) else {
+            return .error("Cannot find transport button: \(name)")
+        }
+        return setTransportButton(name, to: !current)
+    }
+
+    /// Presses a control bar toggle only if it isn't already in `desired`, then confirms it.
+    /// Control bar buttons honor AXPress (unlike track header controls).
+    private func setTransportButton(_ name: String, to desired: Bool, timeout attempts: Int = 20) -> ChannelResult {
         guard let button = AXLogicProElements.findTransportButton(named: name) else {
             return .error("Cannot find transport button: \(name)")
+        }
+        if AXValueExtractors.extractCheckboxState(button) == desired {
+            return .success("{\"\(name)\":\(desired),\"already\":true}")
         }
         guard AXHelpers.performAction(button, kAXPressAction) else {
             return .error("Failed to press transport button: \(name)")
         }
-        return .success("{\"toggled\":\"\(name)\"}")
+        // Record can stay off until a count-in finishes, hence the longer allowance.
+        let confirmed = AXHelpers.poll(attempts: attempts) {
+            AXValueExtractors.extractCheckboxState(button) == desired ? true : nil
+        }
+        guard confirmed != nil else {
+            return .error("Pressed \(name) but Logic still shows it \(desired ? "off" : "on")")
+        }
+        return .success("{\"\(name)\":\(desired)}")
     }
 
     private func setTempo(params: [String: String]) -> ChannelResult {
-        guard let tempoStr = params["tempo"], let _ = Double(tempoStr) else {
+        guard let tempo = (params["bpm"] ?? params["tempo"]).flatMap(Double.init) else {
             return .error("Missing or invalid 'tempo' parameter")
         }
-        guard let transport = AXLogicProElements.getTransportBar() else {
-            return .error("Cannot locate transport bar")
+        guard let transport = AXLogicProElements.getTransportBar(),
+              let slider = AXHelpers.findDescendant(of: transport, role: kAXSliderRole, description: "Tempo", maxDepth: 4) else {
+            return .error("Cannot find the control bar Tempo slider")
         }
-        // Find the tempo text field and set its value
-        let texts = AXHelpers.findAllDescendants(of: transport, role: kAXTextFieldRole, maxDepth: 4)
-        for field in texts {
-            let desc = AXHelpers.getDescription(field)?.lowercased() ?? ""
-            if desc.contains("tempo") || desc.contains("bpm") {
-                AXHelpers.setAttribute(field, kAXValueAttribute, tempoStr as CFTypeRef)
-                AXHelpers.performAction(field, kAXConfirmAction)
-                return .success("{\"tempo\":\(tempoStr)}")
-            }
+        guard AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: tempo)) else {
+            return .error("Logic rejected tempo \(tempo)")
         }
-        return .error("Cannot locate tempo field")
+        let confirmed = AXHelpers.poll {
+            AXValueExtractors.extractSliderValue(slider).map { abs($0 - tempo) < 0.01 ? true : nil } ?? nil
+        }
+        guard confirmed != nil else {
+            return .error("Set tempo \(tempo) but Logic shows \(AXValueExtractors.extractSliderValue(slider) ?? -1)")
+        }
+        return .success("{\"tempo\":\(tempo)}")
+    }
+
+    /// Moves the playhead by setting the control bar's bar slider ("Playhead Position" › "bar").
+    private func gotoBar(params: [String: String]) -> ChannelResult {
+        guard let bar = (params["bar"] ?? params["position"]?.split(separator: ".").first.map(String.init)).flatMap(Int.init) else {
+            return .error("goto_position via AX needs a bar number")
+        }
+        guard let transport = AXLogicProElements.getTransportBar(),
+              let playhead = AXHelpers.findDescendant(of: transport, role: kAXGroupRole, description: "Playhead Position", maxDepth: 4),
+              let slider = AXHelpers.findDescendant(of: playhead, role: kAXSliderRole, description: "bar", maxDepth: 2) else {
+            return .error("Cannot find the playhead bar slider")
+        }
+        guard AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: bar)) else {
+            return .error("Logic rejected playhead bar \(bar)")
+        }
+        let confirmed = AXHelpers.poll { AXValueExtractors.extractSliderValue(slider).map { Int($0) == bar ? true : nil } ?? nil }
+        guard confirmed != nil else {
+            return .error("Set playhead to bar \(bar) but Logic shows bar \(Int(AXValueExtractors.extractSliderValue(slider) ?? -1))")
+        }
+        return .success("{\"bar\":\(bar)}")
     }
 
     private func setCycleRange(params: [String: String]) -> ChannelResult {
