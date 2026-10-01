@@ -551,11 +551,9 @@ actor AccessibilityChannel: Channel {
         guard let item = AXLogicProElements.menuItem(path: path) else {
             return .error("Cannot find \(path.joined(separator: " › "))")
         }
-        guard (AXHelpers.getAttribute(item, kAXEnabledAttribute) as Bool?) ?? true else {
-            return .error("\(path.joined(separator: " › ")) is disabled (nothing selected?)")
-        }
+        // AXEnabled can be stale (menus refresh only when opened); a disabled item fails the press.
         guard AXHelpers.performAction(item, kAXPressAction) else {
-            return .error("Failed to press \(path.joined(separator: " › "))")
+            return .error("\(path.joined(separator: " › ")) is unavailable (nothing selected?)")
         }
         guard expectUndo else { return .success("{\"pressed\":\"\(path.joined(separator: " › "))\"}") }
         let undo = AXHelpers.poll { () -> String? in
@@ -626,20 +624,29 @@ actor AccessibilityChannel: Channel {
     }
 
     /// Presses Edit › Undo… / Redo… and reports which action it was ("Undo Rename Track").
+    /// Logic refreshes menu titles and enabled states only when a menu opens, and silently
+    /// ignores presses on stale items, so open the Edit menu first. (Titles can't confirm the
+    /// result: undoing two identical edits leaves them unchanged.)
     private func pressEditMenuItem(prefix: String) -> ChannelResult {
-        guard let edit = AXLogicProElements.menuItem(path: ["Edit"]),
-              let menu = AXHelpers.getChildren(edit).first,
-              let item = AXHelpers.getChildren(menu).first(where: {
-                  let title = AXHelpers.getTitle($0) ?? ""
-                  return title.hasPrefix(prefix) && !title.hasPrefix("\(prefix) History")
-              }) else {
+        guard let edit = AXLogicProElements.menuItem(path: ["Edit"]) else {
+            return .error("Cannot find the Edit menu")
+        }
+        AXHelpers.performAction(edit, kAXPressAction)
+        usleep(150_000)
+        guard let menu = AXHelpers.getChildren(edit).first else { return .error("Cannot open the Edit menu") }
+        guard let item = AXHelpers.getChildren(menu).first(where: {
+            let title = AXHelpers.getTitle($0) ?? ""
+            return title.hasPrefix(prefix) && !title.hasPrefix("\(prefix) History")
+        }) else {
+            AXHelpers.performAction(menu, kAXCancelAction)
             return .error("Cannot find Edit › \(prefix)")
         }
         let title = AXHelpers.getTitle(item) ?? prefix
-        guard (AXHelpers.getAttribute(item, kAXEnabledAttribute) as Bool?) ?? true else {
+        guard (AXHelpers.getAttribute(item, kAXEnabledAttribute) as Bool?) ?? true,
+              AXHelpers.performAction(item, kAXPressAction) else {
+            AXHelpers.performAction(menu, kAXCancelAction)
             return .error("Nothing to \(prefix.lowercased())")
         }
-        guard AXHelpers.performAction(item, kAXPressAction) else { return .error("Failed to press \(title)") }
         return .success("{\"pressed\":\"\(title)\"}")
     }
 

@@ -95,8 +95,8 @@ actor ChannelRouter {
         "nav.set_zoom_level":         [.cgEvent],
 
         // Editing — keyboard primary
-        "edit.undo":                  [.accessibility, .cgEvent],
-        "edit.redo":                  [.accessibility, .cgEvent],
+        "edit.undo":                  [.accessibility],
+        "edit.redo":                  [.accessibility],
         "edit.cut":                   [.cgEvent],
         "edit.copy":                  [.cgEvent],
         "edit.paste":                 [.cgEvent],
