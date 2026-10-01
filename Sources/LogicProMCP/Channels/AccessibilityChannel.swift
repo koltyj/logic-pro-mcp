@@ -53,15 +53,15 @@ actor AccessibilityChannel: Channel {
 
         // MARK: - Track mutations
         case "track.select":
-            return selectTrack(params: params)
+            return await selectTrack(params: params)
         case "track.set_mute":
-            return setTrackToggle(params: params, button: "Mute")
+            return await setTrackToggle(params: params, button: "Mute")
         case "track.set_solo":
-            return setTrackToggle(params: params, button: "Solo")
+            return await setTrackToggle(params: params, button: "Solo")
         case "track.set_arm":
-            return setTrackToggle(params: params, button: "Record")
+            return await setTrackToggle(params: params, button: "Record")
         case "track.rename":
-            return renameTrack(params: params)
+            return await renameTrack(params: params)
         case "track.set_color":
             return .error("Track color setting not supported via AX")
 
@@ -206,20 +206,37 @@ actor AccessibilityChannel: Channel {
         return .error("No track is currently selected")
     }
 
-    private func selectTrack(params: [String: String]) -> ChannelResult {
+    // Logic 12 track header controls report AXPress as handled but never act on it,
+    // so track selection, toggles and rename use a real click (see AXPointer).
+
+    private func selectTrack(params: [String: String]) async -> ChannelResult {
         guard let indexStr = params["index"], let index = Int(indexStr) else {
             return .error("Missing or invalid 'index' parameter")
         }
-        guard let header = AXLogicProElements.findTrackHeader(at: index) else {
+        guard let header = AXLogicProElements.findTrackHeader(at: index),
+              let field = AXLogicProElements.findTrackNameField(trackIndex: index) else {
             return .error("Track at index \(index) not found")
         }
-        guard AXHelpers.performAction(header, kAXPressAction) else {
-            return .error("Failed to select track \(index)")
+        if AXValueExtractors.isTrackSelected(header) {
+            return .success("{\"selected\":\(index),\"already\":true}")
+        }
+        guard await bringLogicForward() else {
+            return .error("Could not bring Logic Pro to the front; nothing was clicked")
+        }
+        // A single click on the name selects the track; a double-click would rename it.
+        guard AXPointer.click(field) else {
+            return .error("Track \(index) is covered by another window or off screen; nothing was clicked")
+        }
+        let selected = AXHelpers.poll {
+            AXLogicProElements.findTrackHeader(at: index).flatMap { AXValueExtractors.isTrackSelected($0) ? true : nil }
+        }
+        guard selected != nil else {
+            return .error("Clicked track \(index) but Logic does not show it selected")
         }
         return .success("{\"selected\":\(index)}")
     }
 
-    private func setTrackToggle(params: [String: String], button buttonName: String) -> ChannelResult {
+    private func setTrackToggle(params: [String: String], button buttonName: String) async -> ChannelResult {
         guard let indexStr = params["index"], let index = Int(indexStr) else {
             return .error("Missing or invalid 'index' parameter")
         }
@@ -229,32 +246,32 @@ actor AccessibilityChannel: Channel {
         case "Record": AXLogicProElements.findTrackArmButton
         default: { _ in nil }
         }
-        let desired = (params["enabled"] ?? params["muted"] ?? params["soloed"] ?? params["armed"])
-            .map { $0 == "true" } ?? true
+        let desired = params["enabled"].map { $0 == "true" } ?? true
         guard let button = finder(index) else {
             return .error("Cannot find \(buttonName) button on track \(index); the track may not exist, be scrolled out of view, or the header may not show that button")
         }
-        let state: (AXUIElement) -> Bool? = {
-            AXValueExtractors.extractCheckboxState($0) ?? AXValueExtractors.extractButtonState($0)
-        }
-        if state(button) == desired {
+        if AXValueExtractors.extractCheckboxState(button) == desired {
             return .success("{\"track\":\(index),\"\(buttonName)\":\(desired),\"already\":true}")
         }
-        // Track header controls ignore AXPress in Logic 12, so this needs a real click.
-        bringLogicForward()
+        guard await bringLogicForward() else {
+            return .error("Could not bring Logic Pro to the front; nothing was clicked")
+        }
         guard AXPointer.click(button) else {
             return .error("\(buttonName) on track \(index) is covered by another window or off screen; nothing was clicked")
         }
-        for _ in 0..<20 {
-            if let refreshed = finder(index), state(refreshed) == desired {
-                return .success("{\"track\":\(index),\"\(buttonName)\":\(desired)}")
-            }
-            usleep(50_000)
+        // Re-read the element we hold; only search again if Logic replaced it.
+        let confirmed = AXHelpers.poll { () -> Bool? in
+            let state = AXValueExtractors.extractCheckboxState(button)
+                ?? finder(index).flatMap(AXValueExtractors.extractCheckboxState)
+            return state == desired ? true : nil
         }
-        return .error("Clicked \(buttonName) on track \(index) but Logic still shows it \(desired ? "off" : "on")")
+        guard confirmed != nil else {
+            return .error("Clicked \(buttonName) on track \(index) but Logic still shows it \(desired ? "off" : "on")")
+        }
+        return .success("{\"track\":\(index),\"\(buttonName)\":\(desired)}")
     }
 
-    private func renameTrack(params: [String: String]) -> ChannelResult {
+    private func renameTrack(params: [String: String]) async -> ChannelResult {
         guard let indexStr = params["index"], let index = Int(indexStr),
               let name = params["name"] else {
             return .error("Missing 'index' or 'name' parameter")
@@ -262,51 +279,48 @@ actor AccessibilityChannel: Channel {
         guard let field = AXLogicProElements.findTrackNameField(trackIndex: index) else {
             return .error("Cannot find name field for track \(index)")
         }
+        guard await bringLogicForward() else {
+            return .error("Could not bring Logic Pro to the front; nothing was clicked")
+        }
         // The header name field isn't settable; double-clicking opens an editable field editor.
-        bringLogicForward()
         guard AXPointer.click(field, count: 2) else {
             return .error("Name of track \(index) is covered by another window or off screen; nothing was clicked")
         }
-        // Never type or set anything unless an editable text field actually has focus.
-        guard let editor = focusedEditableTextField() else {
+        // Never set anything unless an editable text field actually has focus.
+        guard let editor = AXHelpers.poll(focusedEditableTextField) else {
             return .error("Rename editor did not open on track \(index); nothing was changed")
         }
         guard AXHelpers.setAttribute(editor, kAXValueAttribute, name as CFTypeRef) else {
             return .error("Rename editor on track \(index) rejected the new name")
         }
         AXHelpers.performAction(editor, kAXConfirmAction)
-        for _ in 0..<20 {
-            if let refreshed = AXLogicProElements.findTrackNameField(trackIndex: index),
-               AXHelpers.getDescription(refreshed) == name {
-                return .success("{\"track\":\(index),\"name\":\"\(name)\"}")
-            }
-            usleep(50_000)
+        let confirmed = AXHelpers.poll { () -> Bool? in
+            guard let header = AXLogicProElements.findTrackHeader(at: index) else { return nil }
+            return AXValueExtractors.extractTrackState(from: header, index: index).name == name ? true : nil
         }
-        return .error("Set track \(index) name to '\(name)' but Logic does not show it")
+        guard confirmed != nil else {
+            return .error("Set track \(index) name to '\(name)' but Logic does not show it")
+        }
+        return .success("{\"track\":\(index),\"name\":\"\(name)\"}")
     }
 
-    private func bringLogicForward() {
-        if !ProcessUtils.isLogicProFrontmost {
-            _ = ProcessUtils.activateLogicPro()
-            usleep(300_000)
-        }
+    /// Makes Logic frontmost and raises its main window; synthetic clicks only land on the active app.
+    private func bringLogicForward() async -> Bool {
+        guard await ProcessUtils.ensureLogicProFrontmost() else { return false }
         if let window = AXLogicProElements.mainWindow() {
             AXHelpers.performAction(window, kAXRaiseAction)
         }
+        return true
     }
 
-    /// Waits up to 1s for Logic's focused element to be an editable text field.
+    /// Logic's focused element, if it is an editable text field.
     private func focusedEditableTextField() -> AXUIElement? {
-        guard let app = AXLogicProElements.appRoot() else { return nil }
-        for _ in 0..<20 {
-            usleep(50_000)
-            guard let focused: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute),
-                  AXHelpers.getRole(focused) == kAXTextFieldRole else { continue }
-            var settable = DarwinBoolean(false)
-            AXUIElementIsAttributeSettable(focused, kAXValueAttribute as CFString, &settable)
-            if settable.boolValue { return focused }
-        }
-        return nil
+        guard let app = AXLogicProElements.appRoot(),
+              let focused: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute),
+              AXHelpers.getRole(focused) == kAXTextFieldRole else { return nil }
+        var settable = DarwinBoolean(false)
+        AXUIElementIsAttributeSettable(focused, kAXValueAttribute as CFString, &settable)
+        return settable.boolValue ? focused : nil
     }
 
     // MARK: - Mixer

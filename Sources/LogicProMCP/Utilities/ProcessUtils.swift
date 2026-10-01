@@ -51,4 +51,26 @@ enum ProcessUtils {
     static func activateLogicPro() -> Bool {
         logicProApp()?.activate() ?? false
     }
+
+    /// Activates Logic Pro and waits up to 500ms for it to become frontmost.
+    /// Synthetic key and mouse events only reach the active app. Never reports
+    /// success once cancelled, so callers don't post an event the client no longer wants.
+    static func ensureLogicProFrontmost() async -> Bool {
+        if Task.isCancelled { return false }
+        if isLogicProFrontmost { return true }
+        guard activateLogicPro() else {
+            Log.error("activateLogicPro() failed", subsystem: "process")
+            return false
+        }
+        for _ in 0..<20 {
+            do {
+                try await Task.sleep(for: .milliseconds(25))
+            } catch {
+                return false
+            }
+            if isLogicProFrontmost { return true }
+        }
+        Log.warn("Logic Pro did not become frontmost within 500ms", subsystem: "process")
+        return false
+    }
 }

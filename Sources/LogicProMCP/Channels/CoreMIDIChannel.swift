@@ -4,7 +4,6 @@ import Foundation
 actor CoreMIDIChannel: Channel {
     let id: ChannelID = .coreMIDI
     private let engine: MIDIEngine
-    private var engineStarted = false
     private var stopped = false
 
     init(engine: MIDIEngine) {
@@ -19,7 +18,6 @@ actor CoreMIDIChannel: Channel {
 
     func stop() async {
         stopped = true
-        guard engineStarted else { return }
         await engine.stop()
         Log.info("CoreMIDIChannel stopped", subsystem: "midi")
     }
@@ -28,13 +26,10 @@ actor CoreMIDIChannel: Channel {
         guard !stopped else {
             return .error("CoreMIDI channel is stopped; message not sent")
         }
-        if !engineStarted {
-            do {
-                try await engine.start()
-                engineStarted = true
-            } catch {
-                return .error("CoreMIDI failed to start: \(error)")
-            }
+        do {
+            try await engine.start()  // no-op once running
+        } catch {
+            return .error("CoreMIDI failed to start: \(error)")
         }
         switch operation {
         // MARK: - Transport (MMC)
@@ -262,15 +257,12 @@ actor CoreMIDIChannel: Channel {
     }
 
     func healthCheck() async -> ChannelHealth {
-        guard engineStarted else {
-            return .healthy(detail: "CoreMIDI idle; virtual ports are created on the first MIDI command")
-        }
-        let active = await engine.isActive
-        if active {
+        if await engine.isActive {
             return .healthy(detail: "CoreMIDI client active, virtual ports created")
-        } else {
-            return .unavailable("CoreMIDI client not initialized")
         }
+        return stopped
+            ? .unavailable("CoreMIDI channel stopped")
+            : .healthy(detail: "CoreMIDI idle; virtual ports are created on the first MIDI command")
     }
 
     private static func delivery(_ accepted: Bool, _ description: String) -> ChannelResult {

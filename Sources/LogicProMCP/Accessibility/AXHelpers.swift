@@ -156,6 +156,15 @@ enum AXHelpers {
         return value
     }
 
+    /// Calls `read` until it returns a value, sleeping `interval` between attempts (checks first).
+    static func poll<T>(attempts: Int = 20, interval: useconds_t = 50_000, _ read: () -> T?) -> T? {
+        for attempt in 0..<attempts {
+            if let value = read() { return value }
+            if attempt < attempts - 1 { usleep(interval) }
+        }
+        return nil
+    }
+
     /// Get the description of an element (kAXDescriptionAttribute).
     static func getDescription(_ element: AXUIElement) -> String? {
         getAttribute(element, kAXDescriptionAttribute)

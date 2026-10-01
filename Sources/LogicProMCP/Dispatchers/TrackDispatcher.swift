@@ -117,7 +117,7 @@ struct TrackDispatcher {
             let enabled = params["enabled"]?.boolValue ?? true
             let result = await router.route(
                 operation: "track.set_mute",
-                params: ["index": String(index), "muted": String(enabled)]
+                params: ["index": String(index), "enabled": String(enabled)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
@@ -126,7 +126,7 @@ struct TrackDispatcher {
             let enabled = params["enabled"]?.boolValue ?? true
             let result = await router.route(
                 operation: "track.set_solo",
-                params: ["index": String(index), "soloed": String(enabled)]
+                params: ["index": String(index), "enabled": String(enabled)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
@@ -135,7 +135,7 @@ struct TrackDispatcher {
             let enabled = params["enabled"]?.boolValue ?? true
             let result = await router.route(
                 operation: "track.set_arm",
-                params: ["index": String(index), "armed": String(enabled)]
+                params: ["index": String(index), "enabled": String(enabled)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
