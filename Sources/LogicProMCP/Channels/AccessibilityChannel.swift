@@ -735,24 +735,35 @@ actor AccessibilityChannel: Channel {
         )
     }
 
+    /// Sets a track's volume (0.0–1.0) or pan (-1.0 left … 1.0 right) with the track header's
+    /// own sliders, which are always on screen (the Mixer window may not be), and confirms it.
     private func setMixerValue(params: [String: String], target: MixerTarget) -> ChannelResult {
-        guard let indexStr = params["track"], let index = Int(indexStr),
-              let valueStr = params["value"], let value = Double(valueStr) else {
+        guard let index = params["track"].flatMap(Int.init),
+              let value = params["value"].flatMap(Double.init) else {
             return .error("Missing 'track' or 'value' parameter")
         }
-        let element: AXUIElement?
-        switch target {
-        case .volume:
-            element = AXLogicProElements.findFader(trackIndex: index)
-        case .pan:
-            element = AXLogicProElements.findPanKnob(trackIndex: index)
+        guard let header = AXLogicProElements.findTrackHeader(at: index) else {
+            return .error("Track at index \(index) not found")
         }
-        guard let slider = element else {
-            return .error("Cannot find \(target) control for track \(index)")
+        let sliders = AXHelpers.findAllDescendants(of: header, role: kAXSliderRole, maxDepth: 2)
+        let slider = switch target {
+        case .volume: sliders.first { AXHelpers.getDescription($0) == "Volume" }
+        case .pan: sliders.first { ((AXHelpers.getAttribute($0, kAXHelpAttribute) as String?) ?? "").hasPrefix("Pan") }
         }
-        AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: value))
-        let label = target == .volume ? "volume" : "pan"
-        return .success("{\"\(label)\":\(value),\"track\":\(index)}")
+        guard let slider,
+              let minimum = (AXHelpers.getAttribute(slider, kAXMinValueAttribute) as NSNumber?)?.doubleValue,
+              let maximum = (AXHelpers.getAttribute(slider, kAXMaxValueAttribute) as NSNumber?)?.doubleValue else {
+            return .error("Cannot find the \(target) slider on track \(index)'s header")
+        }
+        let fraction = target == .volume ? value : (value + 1) / 2
+        guard (0...1).contains(fraction) else {
+            return .error(target == .volume ? "volume must be 0.0–1.0" : "pan must be -1.0–1.0")
+        }
+        let raw = (minimum + fraction * (maximum - minimum)).rounded()
+        guard Self.step(slider, to: raw) else {
+            return .failedAfterActing("Set track \(index) \(target) to \(raw) but Logic shows \(AXValueExtractors.extractSliderValue(slider) ?? -1)")
+        }
+        return .success("{\"track\":\(index),\"\(target)\":\(value),\"raw\":\(raw)}")
     }
 
     private func setMasterVolume(params: [String: String]) -> ChannelResult {
