@@ -17,6 +17,13 @@ enum AXLogicProElements {
         return AXHelpers.getAttribute(app, kAXMainWindowAttribute)
     }
 
+    /// File URL of the project in the main window (AXDocument).
+    static func openProjectURL() -> URL? {
+        guard let window = mainWindow(),
+              let document: String = AXHelpers.getAttribute(window, kAXDocumentAttribute) else { return nil }
+        return URL(string: document)
+    }
+
     // MARK: - Transport
 
     /// Find the transport bar area (toolbar/group containing play, stop, record, etc.)

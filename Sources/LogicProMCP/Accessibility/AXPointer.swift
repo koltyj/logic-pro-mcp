@@ -38,8 +38,10 @@ private extension AXPointer {
             guard let visible = frame(of: scrollArea), let target = frame(of: element) else { return }
             if target.minY >= visible.minY && target.maxY <= visible.maxY { return }
             let action = target.minY < visible.minY ? "AXScrollUpByPage" : "AXScrollDownByPage"
-            guard AXHelpers.performAction(scrollArea, action) else { return }
+            // Logic scrolls but reports kAXErrorActionUnsupported, so judge by movement, not the return code.
+            AXHelpers.performAction(scrollArea, action)
             usleep(80_000)
+            if frame(of: element)?.minY == target.minY { return }
         }
     }
 

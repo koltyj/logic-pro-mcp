@@ -35,7 +35,7 @@ actor ChannelRouter {
         "track.create_instrument":    [.cgEvent, .accessibility],
         "track.create_drummer":       [.cgEvent, .accessibility],
         "track.create_external_midi": [.cgEvent, .accessibility],
-        "track.delete":               [.cgEvent, .accessibility],
+        "track.delete":               [.accessibility, .cgEvent],
         "track.rename":               [.accessibility],
         "track.set_mute":             [.accessibility, .cgEvent],
         "track.set_solo":             [.accessibility, .cgEvent],
@@ -103,7 +103,7 @@ actor ChannelRouter {
         // Project — AppleScript for lifecycle, keyboard for save/bounce
         "project.new":                [.appleScript],
         "project.open":               [.appleScript],
-        "project.save":               [.cgEvent, .appleScript],
+        "project.save":               [.accessibility, .cgEvent, .appleScript],
         "project.save_as":            [.appleScript],
         "project.close":              [.cgEvent, .appleScript],
         "project.get_info":           [.accessibility],
@@ -182,7 +182,7 @@ actor ChannelRouter {
             return .success("No channel required for \(operation)")
         }
 
-        var lastError: String = "No channels available"
+        var errors: [String] = []
 
         for channelID in chain {
             guard let channel = channels[channelID] else {
@@ -193,7 +193,7 @@ actor ChannelRouter {
             let health = await channel.healthCheck()
             guard health.available else {
                 Log.debug("Channel \(channelID.rawValue) unhealthy: \(health.detail), trying next", subsystem: "router")
-                lastError = "Channel \(channelID.rawValue): \(health.detail)"
+                errors.append("\(channelID.rawValue): \(health.detail)")
                 continue
             }
 
@@ -207,11 +207,12 @@ actor ChannelRouter {
                 return result
             case .error(let msg):
                 Log.debug("\(operation) failed via \(channelID.rawValue): \(msg), trying next", subsystem: "router")
-                lastError = msg
+                errors.append("\(channelID.rawValue): \(msg)")
             }
         }
 
-        return .error("All channels exhausted for \(operation). Last error: \(lastError)")
+        let detail = errors.isEmpty ? "No channels available" : errors.joined(separator: " | ")
+        return .error("All channels exhausted for \(operation). \(detail)")
     }
 
     /// Get health status for all registered channels.

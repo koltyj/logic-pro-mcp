@@ -62,6 +62,8 @@ actor AccessibilityChannel: Channel {
             return await setTrackToggle(params: params, button: "Record")
         case "track.rename":
             return await renameTrack(params: params)
+        case "track.delete":
+            return deleteSelectedTrack()
         case "track.set_color":
             return .error("Track color setting not supported via AX")
 
@@ -94,6 +96,8 @@ actor AccessibilityChannel: Channel {
             return .error("Marker renaming not yet implemented via AX")
 
         // MARK: - Project
+        case "project.save":
+            return saveProject()
         case "project.get_info":
             return getProjectInfo()
 
@@ -276,18 +280,28 @@ actor AccessibilityChannel: Channel {
               let name = params["name"] else {
             return .error("Missing 'index' or 'name' parameter")
         }
-        guard let field = AXLogicProElements.findTrackNameField(trackIndex: index) else {
+        guard let header = AXLogicProElements.findTrackHeader(at: index),
+              let field = AXLogicProElements.findTrackNameField(trackIndex: index) else {
             return .error("Cannot find name field for track \(index)")
+        }
+        if AXValueExtractors.extractTrackState(from: header, index: index).name == name {
+            return .success("{\"track\":\(index),\"name\":\"\(name)\",\"already\":true}")
         }
         guard await bringLogicForward() else {
             return .error("Could not bring Logic Pro to the front; nothing was clicked")
         }
         // The header name field isn't settable; double-clicking opens an editable field editor.
-        guard AXPointer.click(field, count: 2) else {
-            return .error("Name of track \(index) is covered by another window or off screen; nothing was clicked")
+        // A double-click right after scrolling is sometimes lost, so try twice.
+        var editor: AXUIElement?
+        for _ in 0..<2 where editor == nil {
+            guard let target = AXLogicProElements.findTrackNameField(trackIndex: index) ?? Optional(field),
+                  AXPointer.click(target, count: 2) else {
+                return .error("Name of track \(index) is covered by another window or off screen; nothing was clicked")
+            }
+            // Never set anything unless an editable text field actually has focus.
+            editor = AXHelpers.poll(focusedEditableTextField)
         }
-        // Never set anything unless an editable text field actually has focus.
-        guard let editor = AXHelpers.poll(focusedEditableTextField) else {
+        guard let editor else {
             return .error("Rename editor did not open on track \(index); nothing was changed")
         }
         guard AXHelpers.setAttribute(editor, kAXValueAttribute, name as CFTypeRef) else {
@@ -302,6 +316,48 @@ actor AccessibilityChannel: Channel {
             return .error("Set track \(index) name to '\(name)' but Logic does not show it")
         }
         return .success("{\"track\":\(index),\"name\":\"\(name)\"}")
+    }
+
+    /// Presses File › Save and confirms the project's ProjectData file was rewritten.
+    private func saveProject() -> ChannelResult {
+        guard let project = AXLogicProElements.openProjectURL() else {
+            return .error("Cannot determine the open project's file")
+        }
+        let before = Self.lastProjectWrite(project)
+        guard let item = AXLogicProElements.menuItem(path: ["File", "Save"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press File › Save")
+        }
+        let saved = AXHelpers.poll(attempts: 50, interval: 100_000) { () -> Bool? in
+            guard let after = Self.lastProjectWrite(project), after != before else { return nil }
+            return true
+        }
+        guard saved != nil else {
+            return .error("Pressed File › Save but \(project.lastPathComponent) was not written; a dialog may be open")
+        }
+        return .success("{\"saved\":\"\(project.path)\"}")
+    }
+
+    /// Newest modification date among the project's ProjectData files.
+    private static func lastProjectWrite(_ project: URL) -> Date? {
+        let alternatives = project.appendingPathComponent("Alternatives")
+        let folders = (try? FileManager.default.contentsOfDirectory(at: alternatives, includingPropertiesForKeys: nil)) ?? []
+        return folders.compactMap {
+            try? $0.appendingPathComponent("ProjectData").resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        }.max()
+    }
+
+    private func deleteSelectedTrack() -> ChannelResult {
+        let before = AXLogicProElements.allTrackHeaders().count
+        guard let item = AXLogicProElements.menuItem(path: ["Track", "Delete Track"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press Track › Delete Track")
+        }
+        let deleted = AXHelpers.poll { AXLogicProElements.allTrackHeaders().count == before - 1 ? true : nil }
+        guard deleted != nil else {
+            return .error("Pressed Track › Delete Track but the track count is still \(before)")
+        }
+        return .success("{\"deleted\":true,\"track_count\":\(before - 1)}")
     }
 
     /// Makes Logic frontmost and raises its main window; synthetic clicks only land on the active app.
