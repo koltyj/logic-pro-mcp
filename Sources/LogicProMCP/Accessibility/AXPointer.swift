@@ -91,9 +91,19 @@ private extension AXPointer {
         guard AXUIElementCopyElementAtPosition(
             AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit
         ) == .success, let hit else {
-            return false
+            // Some custom-drawn controls (Marker List name cells) don't support AX hit-testing.
+            // Fall back to the window server: the front-most window at the point must be Logic's.
+            var owner: pid_t = 0
+            AXUIElementGetPid(element, &owner)
+            return frontWindowOwner(at: point) == owner
         }
-        if CFEqual(hit, element) { return true }
+        // The point may land on a child (e.g. the text inside a table cell): accept the target's descendants.
+        var candidate: AXUIElement? = hit
+        for _ in 0..<6 {
+            guard let current = candidate else { break }
+            if CFEqual(current, element) { return true }
+            candidate = AXHelpers.getAttribute(current, kAXParentAttribute)
+        }
         var hitPID: pid_t = 0
         var elementPID: pid_t = 0
         AXUIElementGetPid(hit, &hitPID)
@@ -101,6 +111,19 @@ private extension AXPointer {
         return hitPID == elementPID
             && AXHelpers.getRole(hit) == AXHelpers.getRole(element)
             && AXHelpers.getDescription(hit) == AXHelpers.getDescription(element)
+    }
+
+    /// PID owning the front-most normal window containing `point` (window-server coordinates).
+    static func frontWindowOwner(at point: CGPoint) -> pid_t? {
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        for window in windows where (window[kCGWindowLayer as String] as? Int) == 0 {
+            guard let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds), frame.contains(point) else { continue }
+            return (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+        }
+        return nil
     }
 
     static func post(_ type: CGEventType, at point: CGPoint, clickState: Int64, source: CGEventSource?) {

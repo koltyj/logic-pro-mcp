@@ -125,7 +125,7 @@ actor AccessibilityChannel: Channel {
         case "nav.get_markers":
             return readMarkers().map { encodeResult($0) } ?? .error("Cannot read Logic's Marker List")
         case "nav.rename_marker":
-            return .error("Marker renaming not yet implemented via AX")
+            return await renameMarker(params: params)
 
         // MARK: - Project
         case "dialog.state":
@@ -636,6 +636,8 @@ actor AccessibilityChannel: Channel {
         }
         guard let window = AXHelpers.poll(AXLogicProElements.markerListWindow),
               let table = AXHelpers.findDescendant(of: window, role: kAXTableRole, maxDepth: 6) else { return nil }
+        // A freshly opened list fills its rows a moment later; the footer ("3 Markers") says how many to expect.
+        if !alreadyOpen { usleep(300_000) }
         let rows = AXHelpers.getChildren(table).filter { AXHelpers.getRole($0) == kAXRowRole }
         let markers = rows.enumerated().compactMap { index, row -> MarkerState? in
             let position = AXHelpers.findAllDescendants(of: row, role: kAXSliderRole, maxDepth: 3)
@@ -649,6 +651,53 @@ actor AccessibilityChannel: Channel {
             AXHelpers.performAction(close, kAXPressAction)
         }
         return markers
+    }
+
+    /// Moves to the marker, opens Navigate › Rename Marker, and sets the name only once an editable
+    /// field has focus; then confirms against the Marker List.
+    private func renameMarker(params: [String: String]) async -> ChannelResult {
+        guard let index = params["index"].flatMap(Int.init), let name = params["name"], !name.isEmpty else {
+            return .error("rename_marker requires 'index' and a non-empty 'name'")
+        }
+        guard let markers = readMarkers(), markers.indices.contains(index) else {
+            return .error("No marker at index \(index)")
+        }
+        if markers[index].name == name {
+            return .success("{\"marker\":\(index),\"name\":\"\(name)\",\"already\":true}")
+        }
+        // Navigate › Rename Marker edits the marker at the playhead in an inline field, but only
+        // when the Tracks window has focus: with the Marker List open it just selects the row.
+        if let list = AXLogicProElements.markerListWindow(),
+           let close: AXUIElement = AXHelpers.getAttribute(list, kAXCloseButtonAttribute) {
+            AXHelpers.performAction(close, kAXPressAction)
+        }
+        // Let the list close and focus settle back on the Tracks window before renaming.
+        _ = AXHelpers.poll { AXLogicProElements.markerListWindow() == nil ? true : nil }
+        try? await Task.sleep(for: .milliseconds(500))
+        let bar = markers[index].position.split(separator: " ").first.map(String.init) ?? "1"
+        guard gotoBar(params: ["bar": bar]).isSuccess else { return .error("Cannot move to marker \(index) at bar \(bar)") }
+        guard await bringLogicForward() else { return .error("Could not bring Logic Pro to the front") }
+        guard let item = AXLogicProElements.menuItem(path: ["Navigate", "Rename Marker"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press Navigate › Rename Marker")
+        }
+        guard let editor = AXHelpers.poll(focusedEditableTextField) else {
+            return .failedAfterActing("Rename Marker opened no editable field; nothing was typed")
+        }
+        guard AXHelpers.setAttribute(editor, kAXValueAttribute, name as CFTypeRef) else {
+            return .failedAfterActing("Logic rejected the marker name")
+        }
+        AXHelpers.performAction(editor, kAXConfirmAction)
+        if let dialog = AXLogicProElements.openDialog(),
+           let ok = AXHelpers.findDescendant(of: dialog, role: kAXButtonRole, title: "OK", maxDepth: 4) {
+            AXHelpers.performAction(ok, kAXPressAction)
+        }
+        let renamed = AXHelpers.poll { () -> Bool? in
+            guard let current = readMarkers(), current.indices.contains(index) else { return nil }
+            return current[index].name == name ? true : nil
+        }
+        guard renamed != nil else { return .failedAfterActing("Set marker \(index) to '\(name)' but the Marker List doesn't show it") }
+        return .success("{\"marker\":\(index),\"name\":\"\(name)\"}")
     }
 
     /// Navigate › Create Marker at the playhead, confirmed by the marker count.
@@ -723,6 +772,8 @@ actor AccessibilityChannel: Channel {
             try? await Task.sleep(for: .milliseconds(600))  // un-minimize animation
         }
         AXHelpers.performAction(window, kAXRaiseAction)
+        // Raising doesn't make it key; menu commands like Rename Marker act on the key window.
+        AXHelpers.setAttribute(window, kAXMainAttribute, kCFBooleanTrue)
         return true
     }
 
