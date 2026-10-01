@@ -376,14 +376,24 @@ actor AccessibilityChannel: Channel {
         guard await bringLogicForward() else {
             return .error("Could not bring Logic Pro to the front; nothing was clicked")
         }
-        guard AXPointer.click(button) else {
-            return .error("\(buttonName) on track \(index) is covered by another window or off screen; nothing was clicked")
-        }
         // Re-read the element we hold; only search again if Logic replaced it.
-        let confirmed = AXHelpers.poll { () -> Bool? in
+        let isDesired = { () -> Bool? in
             let state = AXValueExtractors.extractCheckboxState(button)
                 ?? finder(index).flatMap(AXValueExtractors.extractCheckboxState)
             return state == desired ? true : nil
+        }
+        var confirmed: Bool?
+        // A click landing while a menu is still closing is occasionally dropped: retry once, but only
+        // after re-checking, so a click that registers late isn't toggled back.
+        for attempt in 0..<2 where confirmed == nil {
+            if attempt == 1 {
+                usleep(300_000)
+                if isDesired() != nil { confirmed = true; break }
+            }
+            guard AXPointer.click(button) else {
+                return .error("\(buttonName) on track \(index) is covered by another window or off screen; nothing was clicked")
+            }
+            confirmed = AXHelpers.poll(isDesired)
         }
         guard confirmed != nil else {
             return .failedAfterActing("Clicked \(buttonName) on track \(index) but Logic still shows it \(desired ? "off" : "on")")
@@ -747,6 +757,7 @@ actor AccessibilityChannel: Channel {
             AXHelpers.performAction(menu, kAXCancelAction)
             return .error("Nothing to \(prefix.lowercased())")
         }
+        usleep(300_000)  // let the menu finish closing; an immediate click elsewhere can be lost
         return .success("{\"pressed\":\"\(title)\"}")
     }
 
