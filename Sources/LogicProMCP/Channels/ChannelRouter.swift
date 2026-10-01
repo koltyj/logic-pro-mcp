@@ -87,7 +87,7 @@ actor ChannelRouter {
         // Navigation — keyboard primary, AX menu fallback
         "nav.goto_bar":               [.cgEvent, .accessibility],
         "nav.goto_marker":            [.cgEvent, .accessibility],
-        "nav.create_marker":          [.cgEvent],
+        "nav.create_marker":          [.accessibility],
         "nav.delete_marker":          [.cgEvent, .accessibility],
         "nav.rename_marker":          [.accessibility],
         "nav.get_markers":            [.accessibility],

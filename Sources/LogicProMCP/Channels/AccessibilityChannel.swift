@@ -90,6 +90,8 @@ actor AccessibilityChannel: Channel {
             return pressEditMenuItem(prefix: "Redo")
         case "region.clear_all":
             return clearAllRegions()
+        case "nav.create_marker":
+            return createMarker()
         case "edit.select_all":
             return pressMenuItem(["Edit", "Select All"])
         case "edit.delete":
@@ -121,7 +123,7 @@ actor AccessibilityChannel: Channel {
 
         // MARK: - Navigation
         case "nav.get_markers":
-            return .error("Marker reading not yet implemented via AX")
+            return readMarkers().map { encodeResult($0) } ?? .error("Cannot read Logic's Marker List")
         case "nav.rename_marker":
             return .error("Marker renaming not yet implemented via AX")
 
@@ -622,6 +624,48 @@ actor AccessibilityChannel: Channel {
         }
         guard let item, (AXHelpers.getAttribute(item, kAXEnabledAttribute) as Bool?) ?? true else { return false }
         return AXHelpers.performAction(item, kAXPressAction)
+    }
+
+    /// Reads every marker from Logic's Marker List window (opened if needed, then closed again).
+    /// Each row holds bar/beat/division/tick sliders; the name is the row's cell description.
+    private func readMarkers() -> [MarkerState]? {
+        let alreadyOpen = AXLogicProElements.markerListWindow() != nil
+        if !alreadyOpen {
+            guard let item = AXLogicProElements.menuItem(path: ["Navigate", "Open Marker List"]),
+                  AXHelpers.performAction(item, kAXPressAction) else { return nil }
+        }
+        guard let window = AXHelpers.poll(AXLogicProElements.markerListWindow),
+              let table = AXHelpers.findDescendant(of: window, role: kAXTableRole, maxDepth: 6) else { return nil }
+        let rows = AXHelpers.getChildren(table).filter { AXHelpers.getRole($0) == kAXRowRole }
+        let markers = rows.enumerated().compactMap { index, row -> MarkerState? in
+            let position = AXHelpers.findAllDescendants(of: row, role: kAXSliderRole, maxDepth: 3)
+                .prefix(4).compactMap { AXValueExtractors.extractSliderValue($0).map { String(Int($0)) } }
+            guard position.count == 4 else { return nil }
+            let name = AXHelpers.findAllDescendants(of: row, role: kAXCellRole, maxDepth: 2)
+                .compactMap(AXHelpers.getDescription).first { !$0.isEmpty } ?? ""
+            return MarkerState(id: index, name: name, position: position.joined(separator: " "))
+        }
+        if !alreadyOpen, let close: AXUIElement = AXHelpers.getAttribute(window, kAXCloseButtonAttribute) {
+            AXHelpers.performAction(close, kAXPressAction)
+        }
+        return markers
+    }
+
+    /// Navigate › Create Marker at the playhead, confirmed by the marker count.
+    private func createMarker() -> ChannelResult {
+        guard let before = readMarkers()?.count else { return .error("Cannot read Logic's Marker List") }
+        guard let item = AXLogicProElements.menuItem(path: ["Navigate", "Create Marker"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press Navigate › Create Marker")
+        }
+        let after = AXHelpers.poll { () -> Int? in
+            guard let count = readMarkers()?.count, count > before else { return nil }
+            return count
+        }
+        guard let after else {
+            return .failedAfterActing("Pressed Navigate › Create Marker but the marker count is still \(before) (a marker may already exist here)")
+        }
+        return .success("{\"created\":true,\"marker_count\":\(after)}")
     }
 
     private func undoTitle() -> String? {

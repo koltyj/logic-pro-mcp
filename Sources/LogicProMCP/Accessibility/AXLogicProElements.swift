@@ -12,11 +12,13 @@ enum AXLogicProElements {
     }
 
     /// Get the main window element.
-    /// The main window, or the first standard project window when Logic has none (e.g. minimized).
+    /// The project's Tracks window, which holds the control bar and track list. Other windows
+    /// (Marker List, Mixer) can become "main", so prefer the Tracks window, then main, then any standard one.
     static func mainWindow() -> AXUIElement? {
         guard let app = appRoot() else { return nil }
-        if let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute) { return main }
         let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        if let tracks = windows.first(where: { (AXHelpers.getTitle($0) ?? "").hasSuffix(" - Tracks") }) { return tracks }
+        if let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute) { return main }
         return windows.first {
             (AXHelpers.getAttribute($0, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole
         }
@@ -37,6 +39,12 @@ enum AXLogicProElements {
             let document: String? = AXHelpers.getAttribute(window, kAXDocumentAttribute)
             return document.flatMap(URL.init(string:))?.path
         }
+    }
+
+    static func markerListWindow() -> AXUIElement? {
+        guard let app = appRoot() else { return nil }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.first { (AXHelpers.getTitle($0) ?? "").hasSuffix("Marker List") }
     }
 
     /// The open Logic dialog window, if any.
