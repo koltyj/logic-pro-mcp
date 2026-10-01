@@ -48,7 +48,7 @@ actor ChannelRouter {
         "track.set_mute":             [.accessibility, .cgEvent],
         "track.set_solo":             [.accessibility, .cgEvent],
         "track.set_arm":              [.accessibility, .cgEvent],
-        "track.duplicate":            [.cgEvent],
+        "track.duplicate":            [.accessibility],
         "track.set_color":            [.accessibility],
 
         // Mixer — OSC primary for continuous, AX fallback
@@ -115,16 +115,16 @@ actor ChannelRouter {
         "project.save_as":            [.appleScript],
         "project.close":              [.accessibility],
         "project.get_info":           [.accessibility],
-        "project.bounce":             [.cgEvent, .accessibility],
+        "project.bounce":             [.accessibility],
         "project.is_running":         [],  // No channel needed — pure process check
 
         // Views — keyboard toggle
-        "view.toggle_mixer":          [.cgEvent, .accessibility],
-        "view.toggle_piano_roll":     [.cgEvent, .accessibility],
+        "view.toggle_mixer":          [.accessibility, .cgEvent],
+        "view.toggle_piano_roll":     [.accessibility, .cgEvent],
         "view.toggle_score_editor":   [.cgEvent, .accessibility],
         "view.toggle_step_editor":    [.cgEvent, .accessibility],
-        "view.toggle_library":        [.cgEvent, .accessibility],
-        "view.toggle_inspector":      [.cgEvent, .accessibility],
+        "view.toggle_library":        [.accessibility, .cgEvent],
+        "view.toggle_inspector":      [.accessibility, .cgEvent],
 
         // Regions
         "region.clear_all":           [.accessibility],

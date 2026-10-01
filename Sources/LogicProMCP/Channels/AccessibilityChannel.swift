@@ -76,14 +76,26 @@ actor AccessibilityChannel: Channel {
             return await renameTrack(params: params)
         case "track.delete":
             return deleteSelectedTrack()
+        case "track.duplicate":
+            return createTrack(menuPath: ["Track", "Other", "New Track With Duplicate Settings"])
+        case "view.toggle_mixer":
+            return toggleTransportButton(named: "Mixer")
+        case "view.toggle_piano_roll":
+            return toggleTransportButton(named: "Editors")
+        case "view.toggle_library":
+            return toggleTransportButton(named: "Library")
+        case "view.toggle_inspector":
+            return toggleTransportButton(named: "Inspector")
+        case "project.bounce":
+            return openBounceDialog()
         case "track.set_input_monitoring":
             return await setTrackToggle(params: params, button: "Input Monitoring")
         case "track.create_audio":
-            return createTrack(menuItem: "New Audio Track")
+            return createTrack(menuPath: ["Track", "New Audio Track"])
         case "track.create_instrument":
-            return createTrack(menuItem: "New Software Instrument Track")
+            return createTrack(menuPath: ["Track", "New Software Instrument Track"])
         case "track.create_external_midi":
-            return createTrack(menuItem: "New External MIDI Track")
+            return createTrack(menuPath: ["Track", "New External MIDI Track"])
         case "edit.undo":
             return pressEditMenuItem(prefix: "Undo")
         case "edit.redo":
@@ -550,18 +562,31 @@ actor AccessibilityChannel: Channel {
         }.max()
     }
 
-    /// Presses a Track › New … Track item and confirms one track was added.
-    private func createTrack(menuItem title: String) -> ChannelResult {
+    /// Presses a track-creating menu item and confirms exactly one track was added.
+    private func createTrack(menuPath path: [String]) -> ChannelResult {
+        let title = path.joined(separator: " › ")
         let before = AXLogicProElements.allTrackHeaders().count
-        guard let item = AXLogicProElements.menuItem(path: ["Track", title]),
+        guard let item = AXLogicProElements.menuItem(path: path),
               AXHelpers.performAction(item, kAXPressAction) else {
-            return .error("Cannot press Track › \(title)")
+            return .error("Cannot press \(title)")
         }
         let added = AXHelpers.poll { AXLogicProElements.allTrackHeaders().count == before + 1 ? true : nil }
         guard added != nil else {
-            return .failedAfterActing("Pressed Track › \(title) but the track count is still \(before)")
+            return .failedAfterActing("Pressed \(title) but the track count is still \(before)")
         }
-        return .success("{\"created\":\"\(title)\",\"track_count\":\(before + 1)}")
+        return .success("{\"created\":\"\(path.last ?? title)\",\"track_count\":\(before + 1)}")
+    }
+
+    /// Opens File › Bounce › Project or Section… and returns Logic's dialog so the caller can answer it.
+    private func openBounceDialog() -> ChannelResult {
+        guard let item = AXLogicProElements.menuItem(path: ["File", "Bounce", "Project or Section…"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press File › Bounce › Project or Section…")
+        }
+        guard let dialog = AXHelpers.poll(attempts: 30, interval: 100_000, AXLogicProElements.openDialogSummary) else {
+            return .failedAfterActing("Pressed Bounce but no bounce dialog appeared")
+        }
+        return .success("Bounce dialog open: \(dialog). Answer with logic_system dialog_respond {button}.")
     }
 
     /// Presses a menu item. With `expectUndo`, confirms Logic recorded an undoable edit.
