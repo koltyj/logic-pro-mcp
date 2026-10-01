@@ -112,9 +112,10 @@ final class CoreMIDIChannelTests: XCTestCase {
 
     func testCoreMIDIReportsDroppedMessages() async {
         let channel = CoreMIDIChannel(engine: MIDIEngine())
+        await channel.stop()
         let result = await channel.execute(operation: "mmc.play", params: [:])
         guard case .error = result else {
-            return XCTFail("A stopped MIDI engine must report an error")
+            return XCTFail("A stopped MIDI channel must report an error")
         }
     }
 

@@ -229,13 +229,29 @@ actor AccessibilityChannel: Channel {
         case "Record": AXLogicProElements.findTrackArmButton
         default: { _ in nil }
         }
+        let desired = (params["enabled"] ?? params["muted"] ?? params["soloed"] ?? params["armed"])
+            .map { $0 == "true" } ?? true
         guard let button = finder(index) else {
-            return .error("Cannot find \(buttonName) button on track \(index)")
+            return .error("Cannot find \(buttonName) button on track \(index); the track may not exist, be scrolled out of view, or the header may not show that button")
         }
-        guard AXHelpers.performAction(button, kAXPressAction) else {
-            return .error("Failed to click \(buttonName) on track \(index)")
+        let state: (AXUIElement) -> Bool? = {
+            AXValueExtractors.extractCheckboxState($0) ?? AXValueExtractors.extractButtonState($0)
         }
-        return .success("{\"track\":\(index),\"toggled\":\"\(buttonName)\"}")
+        if state(button) == desired {
+            return .success("{\"track\":\(index),\"\(buttonName)\":\(desired),\"already\":true}")
+        }
+        // Track header controls ignore AXPress in Logic 12, so this needs a real click.
+        bringLogicForward()
+        guard AXPointer.click(button) else {
+            return .error("\(buttonName) on track \(index) is covered by another window or off screen; nothing was clicked")
+        }
+        for _ in 0..<20 {
+            if let refreshed = finder(index), state(refreshed) == desired {
+                return .success("{\"track\":\(index),\"\(buttonName)\":\(desired)}")
+            }
+            usleep(50_000)
+        }
+        return .error("Clicked \(buttonName) on track \(index) but Logic still shows it \(desired ? "off" : "on")")
     }
 
     private func renameTrack(params: [String: String]) -> ChannelResult {
@@ -246,11 +262,51 @@ actor AccessibilityChannel: Channel {
         guard let field = AXLogicProElements.findTrackNameField(trackIndex: index) else {
             return .error("Cannot find name field for track \(index)")
         }
-        // Double-click to enter edit mode, then set value
-        AXHelpers.performAction(field, kAXPressAction)
-        AXHelpers.setAttribute(field, kAXValueAttribute, name as CFTypeRef)
-        AXHelpers.performAction(field, kAXConfirmAction)
-        return .success("{\"track\":\(index),\"name\":\"\(name)\"}")
+        // The header name field isn't settable; double-clicking opens an editable field editor.
+        bringLogicForward()
+        guard AXPointer.click(field, count: 2) else {
+            return .error("Name of track \(index) is covered by another window or off screen; nothing was clicked")
+        }
+        // Never type or set anything unless an editable text field actually has focus.
+        guard let editor = focusedEditableTextField() else {
+            return .error("Rename editor did not open on track \(index); nothing was changed")
+        }
+        guard AXHelpers.setAttribute(editor, kAXValueAttribute, name as CFTypeRef) else {
+            return .error("Rename editor on track \(index) rejected the new name")
+        }
+        AXHelpers.performAction(editor, kAXConfirmAction)
+        for _ in 0..<20 {
+            if let refreshed = AXLogicProElements.findTrackNameField(trackIndex: index),
+               AXHelpers.getDescription(refreshed) == name {
+                return .success("{\"track\":\(index),\"name\":\"\(name)\"}")
+            }
+            usleep(50_000)
+        }
+        return .error("Set track \(index) name to '\(name)' but Logic does not show it")
+    }
+
+    private func bringLogicForward() {
+        if !ProcessUtils.isLogicProFrontmost {
+            _ = ProcessUtils.activateLogicPro()
+            usleep(300_000)
+        }
+        if let window = AXLogicProElements.mainWindow() {
+            AXHelpers.performAction(window, kAXRaiseAction)
+        }
+    }
+
+    /// Waits up to 1s for Logic's focused element to be an editable text field.
+    private func focusedEditableTextField() -> AXUIElement? {
+        guard let app = AXLogicProElements.appRoot() else { return nil }
+        for _ in 0..<20 {
+            usleep(50_000)
+            guard let focused: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute),
+                  AXHelpers.getRole(focused) == kAXTextFieldRole else { continue }
+            var settable = DarwinBoolean(false)
+            AXUIElementIsAttributeSettable(focused, kAXValueAttribute as CFString, &settable)
+            if settable.boolValue { return focused }
+        }
+        return nil
     }
 
     // MARK: - Mixer

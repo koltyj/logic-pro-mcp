@@ -1,0 +1,98 @@
+import ApplicationServices
+import CoreGraphics
+import Foundation
+
+/// Synthetic mouse input for Logic controls that ignore AXPress.
+/// Logic 12's track header controls (Mute, Solo, Input Monitoring, name field)
+/// report AXPress as handled but never act on it; a real click does.
+enum AXPointer {
+    /// Clicks the center of `element` `count` times, then restores the cursor.
+    /// Returns false without clicking when another element is on top at that point.
+    static func click(_ element: AXUIElement, count: Int = 1) -> Bool {
+        scrollIntoView(element)
+        guard let point = center(of: element), isTopmost(element, at: point) else { return false }
+        let source = CGEventSource(stateID: .hidSystemState)
+        let original = CGEvent(source: nil)?.location
+        post(.mouseMoved, at: point, clickState: 0, source: source)
+        usleep(120_000)
+        // Logic ignores mouse events whose click state is 0, so every press carries its click count.
+        for clickState in 1...max(count, 1) {
+            post(.leftMouseDown, at: point, clickState: Int64(clickState), source: source)
+            usleep(40_000)
+            post(.leftMouseUp, at: point, clickState: Int64(clickState), source: source)
+            usleep(60_000)
+        }
+        if let original {
+            post(.mouseMoved, at: original, clickState: 0, source: source)
+        }
+        return true
+    }
+}
+
+private extension AXPointer {
+    /// Pages the nearest enclosing scroll area until `element` is fully inside its visible frame.
+    /// Off-screen track rows still report positions, but those points show other controls.
+    static func scrollIntoView(_ element: AXUIElement) {
+        guard let scrollArea = enclosingScrollArea(of: element) else { return }
+        for _ in 0..<30 {
+            guard let visible = frame(of: scrollArea), let target = frame(of: element) else { return }
+            if target.minY >= visible.minY && target.maxY <= visible.maxY { return }
+            let action = target.minY < visible.minY ? "AXScrollUpByPage" : "AXScrollDownByPage"
+            guard AXHelpers.performAction(scrollArea, action) else { return }
+            usleep(80_000)
+        }
+    }
+
+    static func enclosingScrollArea(of element: AXUIElement) -> AXUIElement? {
+        var current: AXUIElement? = AXHelpers.getAttribute(element, kAXParentAttribute)
+        while let candidate = current {
+            if AXHelpers.getRole(candidate) == kAXScrollAreaRole { return candidate }
+            current = AXHelpers.getAttribute(candidate, kAXParentAttribute)
+        }
+        return nil
+    }
+
+    static func frame(of element: AXUIElement) -> CGRect? {
+        guard let positionValue: AXValue = AXHelpers.getAttribute(element, kAXPositionAttribute),
+              let sizeValue: AXValue = AXHelpers.getAttribute(element, kAXSizeAttribute) else {
+            return nil
+        }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(positionValue, .cgPoint, &position),
+              AXValueGetValue(sizeValue, .cgSize, &size) else {
+            return nil
+        }
+        return CGRect(origin: position, size: size)
+    }
+
+    static func center(of element: AXUIElement) -> CGPoint? {
+        frame(of: element).map { CGPoint(x: $0.midX, y: $0.midY) }
+    }
+
+    /// True when hit-testing `point` lands on `element`, so a click can't hit another window.
+    static func isTopmost(_ element: AXUIElement, at point: CGPoint) -> Bool {
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(
+            AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit
+        ) == .success, let hit else {
+            return false
+        }
+        if CFEqual(hit, element) { return true }
+        var hitPID: pid_t = 0
+        var elementPID: pid_t = 0
+        AXUIElementGetPid(hit, &hitPID)
+        AXUIElementGetPid(element, &elementPID)
+        return hitPID == elementPID
+            && AXHelpers.getRole(hit) == AXHelpers.getRole(element)
+            && AXHelpers.getDescription(hit) == AXHelpers.getDescription(element)
+    }
+
+    static func post(_ type: CGEventType, at point: CGPoint, clickState: Int64, source: CGEventSource?) {
+        guard let event = CGEvent(
+            mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left
+        ) else { return }
+        event.setIntegerValueField(.mouseEventClickState, value: clickState)
+        event.post(tap: .cghidEventTap)
+    }
+}
