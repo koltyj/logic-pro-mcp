@@ -66,6 +66,18 @@ enum AXLogicProElements {
         }
     }
 
+    /// Answers Logic's "MIDI ports changed" alert (no text, a single Continue button), which appears
+    /// whenever virtual MIDI ports come or go, including the MCP's own. Returns true if it was dismissed.
+    static func dismissMIDIPortsAlert() -> Bool {
+        guard let dialog = openDialog() else { return false }
+        let texts = AXHelpers.findAllDescendants(of: dialog, role: kAXStaticTextRole, maxDepth: 4)
+            .compactMap { AXValueExtractors.extractTextValue($0) }.filter { !$0.isEmpty }
+        let buttons = AXHelpers.findAllDescendants(of: dialog, role: kAXButtonRole, maxDepth: 4)
+            .filter { !(AXHelpers.getTitle($0) ?? "").isEmpty }
+        guard texts.isEmpty, buttons.count == 1, AXHelpers.getTitle(buttons[0]) == "Continue" else { return false }
+        return AXHelpers.performAction(buttons[0], kAXPressAction)
+    }
+
     /// Text and buttons of an open Logic dialog window, if any.
     static func openDialogSummary() -> String? {
         guard let dialog = openDialog() else { return nil }

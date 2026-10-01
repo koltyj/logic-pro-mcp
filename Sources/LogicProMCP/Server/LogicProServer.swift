@@ -157,7 +157,7 @@ actor LogicProServer {
         await router.register(axChannel)
         await router.register(cgEventChannel)
         await router.register(appleScriptChannel)
-        await router.setDialogProbe { AXLogicProElements.openDialogSummary() }
+        await router.setDialogProbe { AXLogicProElements.dismissMIDIPortsAlert() ? nil : AXLogicProElements.openDialogSummary() }
 
         // Start all channels
         await router.startAll()
