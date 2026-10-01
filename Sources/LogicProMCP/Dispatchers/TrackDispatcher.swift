@@ -7,11 +7,11 @@ struct TrackDispatcher {
         description: """
             Track actions in Logic Pro. \
             Commands: select, create_audio, create_instrument, create_drummer, \
-            create_external_midi, delete, duplicate, rename, mute, solo, arm, set_color. \
+            create_external_midi, delete, duplicate, rename, mute, solo, arm, input_monitoring, set_color. \
             Params by command: \
             select -> { index: Int } or { name: String }; \
             rename -> { index: Int, name: String }; \
-            mute/solo/arm -> { index: Int, enabled: Bool }; \
+            mute/solo/arm/input_monitoring -> { index: Int, enabled: Bool } (sets state; no-op if already set); \
             set_color -> { index: Int, color: Int } (Logic color index 0-24); \
             create_* -> {} (creates at current position); \
             delete/duplicate -> { index: Int }
@@ -135,6 +135,15 @@ struct TrackDispatcher {
             let enabled = params["enabled"]?.boolValue ?? true
             let result = await router.route(
                 operation: "track.set_arm",
+                params: ["index": String(index), "enabled": String(enabled)]
+            )
+            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
+
+        case "input_monitoring":
+            let index = params["index"]?.intValue ?? 0
+            let enabled = params["enabled"]?.boolValue ?? true
+            let result = await router.route(
+                operation: "track.set_input_monitoring",
                 params: ["index": String(index), "enabled": String(enabled)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)

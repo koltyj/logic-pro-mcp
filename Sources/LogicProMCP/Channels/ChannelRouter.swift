@@ -38,10 +38,11 @@ actor ChannelRouter {
 
         // Track mutation — AX click, fallback to keyboard
         "track.select":               [.accessibility, .cgEvent],
-        "track.create_audio":         [.cgEvent, .accessibility],
-        "track.create_instrument":    [.cgEvent, .accessibility],
+        "track.create_audio":         [.accessibility, .cgEvent],
+        "track.create_instrument":    [.accessibility, .cgEvent],
         "track.create_drummer":       [.cgEvent, .accessibility],
-        "track.create_external_midi": [.cgEvent, .accessibility],
+        "track.create_external_midi": [.accessibility, .cgEvent],
+        "track.set_input_monitoring": [.accessibility],
         "track.delete":               [.accessibility, .cgEvent],
         "track.rename":               [.accessibility],
         "track.set_mute":             [.accessibility, .cgEvent],
@@ -94,8 +95,8 @@ actor ChannelRouter {
         "nav.set_zoom_level":         [.cgEvent],
 
         // Editing — keyboard primary
-        "edit.undo":                  [.cgEvent, .accessibility],
-        "edit.redo":                  [.cgEvent, .accessibility],
+        "edit.undo":                  [.accessibility, .cgEvent],
+        "edit.redo":                  [.accessibility, .cgEvent],
         "edit.cut":                   [.cgEvent],
         "edit.copy":                  [.cgEvent],
         "edit.paste":                 [.cgEvent],

@@ -302,6 +302,11 @@ enum AXLogicProElements {
     }
 
     /// Find the track name text field on a header.
+    static func findTrackInputMonitorButton(trackIndex: Int) -> AXUIElement? {
+        guard let header = findTrackHeader(at: trackIndex) else { return nil }
+        return findToggleByDescription(in: header, description: "Input Monitoring")
+    }
+
     static func findTrackNameField(trackIndex: Int) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
         return AXHelpers.findDescendant(of: header, role: kAXTextFieldRole, maxDepth: 4)

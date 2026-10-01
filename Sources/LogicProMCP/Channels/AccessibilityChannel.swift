@@ -75,6 +75,18 @@ actor AccessibilityChannel: Channel {
             return await renameTrack(params: params)
         case "track.delete":
             return deleteSelectedTrack()
+        case "track.set_input_monitoring":
+            return await setTrackToggle(params: params, button: "Input Monitoring")
+        case "track.create_audio":
+            return createTrack(menuItem: "New Audio Track")
+        case "track.create_instrument":
+            return createTrack(menuItem: "New Software Instrument Track")
+        case "track.create_external_midi":
+            return createTrack(menuItem: "New External MIDI Track")
+        case "edit.undo":
+            return pressEditMenuItem(prefix: "Undo")
+        case "edit.redo":
+            return pressEditMenuItem(prefix: "Redo")
         case "track.set_color":
             return .error("Track color setting not supported via AX")
 
@@ -307,6 +319,7 @@ actor AccessibilityChannel: Channel {
         case "Mute": AXLogicProElements.findTrackMuteButton
         case "Solo": AXLogicProElements.findTrackSoloButton
         case "Record": AXLogicProElements.findTrackArmButton
+        case "Input Monitoring": AXLogicProElements.findTrackInputMonitorButton
         default: { _ in nil }
         }
         let desired = params["enabled"].map { $0 == "true" } ?? true
@@ -475,6 +488,38 @@ actor AccessibilityChannel: Channel {
         return folders.compactMap {
             try? $0.appendingPathComponent("ProjectData").resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         }.max()
+    }
+
+    /// Presses a Track › New … Track item and confirms one track was added.
+    private func createTrack(menuItem title: String) -> ChannelResult {
+        let before = AXLogicProElements.allTrackHeaders().count
+        guard let item = AXLogicProElements.menuItem(path: ["Track", title]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press Track › \(title)")
+        }
+        let added = AXHelpers.poll { AXLogicProElements.allTrackHeaders().count == before + 1 ? true : nil }
+        guard added != nil else {
+            return .error("Pressed Track › \(title) but the track count is still \(before)")
+        }
+        return .success("{\"created\":\"\(title)\",\"track_count\":\(before + 1)}")
+    }
+
+    /// Presses Edit › Undo… / Redo… and reports which action it was ("Undo Rename Track").
+    private func pressEditMenuItem(prefix: String) -> ChannelResult {
+        guard let edit = AXLogicProElements.menuItem(path: ["Edit"]),
+              let menu = AXHelpers.getChildren(edit).first,
+              let item = AXHelpers.getChildren(menu).first(where: {
+                  let title = AXHelpers.getTitle($0) ?? ""
+                  return title.hasPrefix(prefix) && !title.hasPrefix("\(prefix) History")
+              }) else {
+            return .error("Cannot find Edit › \(prefix)")
+        }
+        let title = AXHelpers.getTitle(item) ?? prefix
+        guard (AXHelpers.getAttribute(item, kAXEnabledAttribute) as Bool?) ?? true else {
+            return .error("Nothing to \(prefix.lowercased())")
+        }
+        guard AXHelpers.performAction(item, kAXPressAction) else { return .error("Failed to press \(title)") }
+        return .success("{\"pressed\":\"\(title)\"}")
     }
 
     private func deleteSelectedTrack() -> ChannelResult {
