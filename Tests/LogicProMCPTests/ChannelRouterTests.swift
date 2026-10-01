@@ -53,4 +53,21 @@ final class ChannelRouterTests: XCTestCase {
 
         XCTAssertTrue(result.isSuccess, result.message)
     }
+
+    func testNoFallbackAfterAChannelActed() async {
+        let accessibility = FakeChannel(id: .accessibility, responses: [
+            "transport.record": [.failedAfterActing("Pressed Record but Logic still shows it off")],
+        ])
+        let keyboard = FakeChannel(id: .cgEvent, responses: ["transport.record": [.unverified("posted")]])
+        let router = ChannelRouter()
+        await router.register(accessibility)
+        await router.register(keyboard)
+
+        let result = await router.route(operation: "transport.record")
+
+        XCTAssertFalse(result.isSuccess)
+        XCTAssertTrue(result.message.contains("Pressed Record"), result.message)
+        let fallbacks = await keyboard.callCount("transport.record")
+        XCTAssertEqual(fallbacks, 0, "Falling back after acting could record twice")
+    }
 }

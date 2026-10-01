@@ -40,7 +40,7 @@ actor AccessibilityChannel: Channel {
         case "transport.play":
             return setTransportButton("Play", to: true)
         case "transport.stop":
-            return setTransportButton("Play", to: false)
+            return await stopTransport()
         case "transport.record":
             return setTransportButton("Record", to: true, timeout: 60)
         case "transport.toggle_cycle":
@@ -201,14 +201,22 @@ actor AccessibilityChannel: Channel {
             return .success("{\"\(name)\":\(desired),\"already\":true}")
         }
         guard AXHelpers.performAction(button, kAXPressAction) else {
+            // A press that opens a modal dialog reports failure even though Logic acted.
+            if let dialog = AXHelpers.poll(attempts: 5, interval: 100_000, AXLogicProElements.openDialogSummary) {
+                return .failedAfterActing("Pressed \(name); Logic answered with a dialog: \(dialog)")
+            }
             return .error("Failed to press transport button: \(name)")
         }
         // Record can stay off until a count-in finishes, hence the longer allowance.
-        let confirmed = AXHelpers.poll(attempts: attempts) {
-            AXValueExtractors.extractCheckboxState(button) == desired ? true : nil
+        let outcome = AXHelpers.poll(attempts: attempts) { () -> String? in
+            if AXValueExtractors.extractCheckboxState(button) == desired { return "" }
+            return AXLogicProElements.openDialogSummary()
         }
-        guard confirmed != nil else {
-            return .error("Pressed \(name) but Logic still shows it \(desired ? "off" : "on")")
+        if let dialog = outcome, !dialog.isEmpty {
+            return .failedAfterActing("Pressed \(name); Logic answered with a dialog: \(dialog)")
+        }
+        guard outcome != nil else {
+            return .failedAfterActing("Pressed \(name) but Logic still shows it \(desired ? "off" : "on")")
         }
         return .success("{\"\(name)\":\(desired)}")
     }
@@ -221,16 +229,45 @@ actor AccessibilityChannel: Channel {
               let slider = AXHelpers.findDescendant(of: transport, role: kAXSliderRole, description: "Tempo", maxDepth: 4) else {
             return .error("Cannot find the control bar Tempo slider")
         }
-        guard AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: tempo)) else {
-            return .error("Logic rejected tempo \(tempo)")
+        guard Self.step(slider, to: tempo.rounded()) else {
+            return .failedAfterActing("Set tempo \(tempo) but Logic shows \(AXValueExtractors.extractSliderValue(slider) ?? -1)")
         }
-        let confirmed = AXHelpers.poll {
-            AXValueExtractors.extractSliderValue(slider).map { abs($0 - tempo) < 0.01 ? true : nil } ?? nil
+        return .success("{\"tempo\":\(tempo.rounded())}")
+    }
+
+    /// Logic moves its control bar sliders one unit per AX value set, toward the requested value,
+    /// so keep setting until the readback matches. Fails as soon as a set makes no progress.
+    private static func step(_ slider: AXUIElement, to target: Double, maxSteps: Int = 2_000) -> Bool {
+        var previous = AXValueExtractors.extractSliderValue(slider)
+        for _ in 0..<maxSteps {
+            guard let current = previous else { return false }
+            if abs(current - target) < 0.5 { return true }
+            AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: target))
+            let next = AXHelpers.poll(attempts: 10, interval: 10_000) { () -> Double? in
+                guard let value = AXValueExtractors.extractSliderValue(slider), value != current else { return nil }
+                return value
+            }
+            guard let next else { return false }
+            previous = next
         }
-        guard confirmed != nil else {
-            return .error("Set tempo \(tempo) but Logic shows \(AXValueExtractors.extractSliderValue(slider) ?? -1)")
+        return false
+    }
+
+    /// Logic 12 has no Stop button and pressing Play doesn't stop playback, so send Space and confirm.
+    private func stopTransport() async -> ChannelResult {
+        guard let play = AXLogicProElements.findTransportButton(named: "Play") else {
+            return .error("Cannot find transport button: Play")
         }
-        return .success("{\"tempo\":\(tempo)}")
+        if AXValueExtractors.extractCheckboxState(play) == false {
+            return .success("{\"Play\":false,\"already\":true}")
+        }
+        guard await bringLogicForward() else {
+            return .error("Could not bring Logic Pro to the front to stop")
+        }
+        AXPointer.pressKey(49)  // Space
+        let stopped = AXHelpers.poll { AXValueExtractors.extractCheckboxState(play) == false ? true : nil }
+        guard stopped != nil else { return .failedAfterActing("Sent Space but Logic is still playing") }
+        return .success("{\"Play\":false}")
     }
 
     /// Moves the playhead by setting the control bar's bar slider ("Playhead Position" › "bar").
@@ -243,12 +280,10 @@ actor AccessibilityChannel: Channel {
               let slider = AXHelpers.findDescendant(of: playhead, role: kAXSliderRole, description: "bar", maxDepth: 2) else {
             return .error("Cannot find the playhead bar slider")
         }
-        guard AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: bar)) else {
-            return .error("Logic rejected playhead bar \(bar)")
-        }
-        let confirmed = AXHelpers.poll { AXValueExtractors.extractSliderValue(slider).map { Int($0) == bar ? true : nil } ?? nil }
-        guard confirmed != nil else {
-            return .error("Set playhead to bar \(bar) but Logic shows bar \(Int(AXValueExtractors.extractSliderValue(slider) ?? -1))")
+        // Bar start: bring the beat back to 1 as well (the bar slider keeps the current beat).
+        let beat = AXHelpers.findDescendant(of: playhead, role: kAXSliderRole, description: "beat", maxDepth: 2)
+        guard Self.step(slider, to: Double(bar)), beat.map({ Self.step($0, to: 1) }) ?? true else {
+            return .failedAfterActing("Set playhead to bar \(bar) but Logic shows bar \(Int(AXValueExtractors.extractSliderValue(slider) ?? -1))")
         }
         return .success("{\"bar\":\(bar)}")
     }
@@ -312,7 +347,7 @@ actor AccessibilityChannel: Channel {
             AXLogicProElements.findTrackHeader(at: index).flatMap { AXValueExtractors.isTrackSelected($0) ? true : nil }
         }
         guard selected != nil else {
-            return .error("Clicked track \(index) but Logic does not show it selected")
+            return .failedAfterActing("Clicked track \(index) but Logic does not show it selected")
         }
         return .success("{\"selected\":\(index)}")
     }
@@ -348,7 +383,7 @@ actor AccessibilityChannel: Channel {
             return state == desired ? true : nil
         }
         guard confirmed != nil else {
-            return .error("Clicked \(buttonName) on track \(index) but Logic still shows it \(desired ? "off" : "on")")
+            return .failedAfterActing("Clicked \(buttonName) on track \(index) but Logic still shows it \(desired ? "off" : "on")")
         }
         return .success("{\"track\":\(index),\"\(buttonName)\":\(desired)}")
     }
@@ -383,7 +418,7 @@ actor AccessibilityChannel: Channel {
             return .error("Rename editor did not open on track \(index); nothing was changed")
         }
         guard AXHelpers.setAttribute(editor, kAXValueAttribute, name as CFTypeRef) else {
-            return .error("Rename editor on track \(index) rejected the new name")
+            return .failedAfterActing("Rename editor on track \(index) rejected the new name")
         }
         AXHelpers.performAction(editor, kAXConfirmAction)
         let confirmed = AXHelpers.poll { () -> Bool? in
@@ -391,7 +426,7 @@ actor AccessibilityChannel: Channel {
             return AXValueExtractors.extractTrackState(from: header, index: index).name == name ? true : nil
         }
         guard confirmed != nil else {
-            return .error("Set track \(index) name to '\(name)' but Logic does not show it")
+            return .failedAfterActing("Set track \(index) name to '\(name)' but Logic does not show it")
         }
         return .success("{\"track\":\(index),\"name\":\"\(name)\"}")
     }
@@ -411,7 +446,7 @@ actor AccessibilityChannel: Channel {
             return true
         }
         guard saved != nil else {
-            return .error("Pressed File › Save but \(project.lastPathComponent) was not written; a dialog may be open")
+            return .failedAfterActing("Pressed File › Save but \(project.lastPathComponent) was not written; a dialog may be open")
         }
         return .success("{\"saved\":\"\(project.path)\"}")
     }
@@ -430,7 +465,7 @@ actor AccessibilityChannel: Channel {
             return CFEqual(open, dialog) ? nil : (AXLogicProElements.openDialogSummary() ?? "")
         }
         switch next {
-        case .none: return .error("Pressed '\(title)' but the dialog is still open")
+        case .none: return .failedAfterActing("Pressed '\(title)' but the dialog is still open")
         case .some(""): return .success("{\"pressed\":\"\(title)\"}")
         case .some(let following): return .success("Pressed '\(title)'. Logic now asks: \(following)")
         }
@@ -458,10 +493,10 @@ actor AccessibilityChannel: Channel {
             return AXLogicProElements.openDialogSummary()
         }
         guard let outcome else {
-            return .error("\(target) did not open within 15s")
+            return .failedAfterActing("\(target) did not open within 15s")
         }
         guard outcome.isEmpty else {
-            return .error("Opening \(target) is waiting on a Logic dialog: \(outcome)")
+            return .failedAfterActing("Opening \(target) is waiting on a Logic dialog: \(outcome)")
         }
         return .success("{\"opened\":\"\(target)\"}")
     }
@@ -479,10 +514,10 @@ actor AccessibilityChannel: Channel {
             return AXLogicProElements.openDialogSummary()
         }
         guard let outcome else {
-            return .error("\(project) is still open after 3s")
+            return .failedAfterActing("\(project) is still open after 3s")
         }
         guard outcome.isEmpty else {
-            return .error("Closing \(project) is waiting on a Logic dialog: \(outcome)")
+            return .failedAfterActing("Closing \(project) is waiting on a Logic dialog: \(outcome)")
         }
         return .success("{\"closed\":\"\(project)\"}")
     }
@@ -505,7 +540,7 @@ actor AccessibilityChannel: Channel {
         }
         let added = AXHelpers.poll { AXLogicProElements.allTrackHeaders().count == before + 1 ? true : nil }
         guard added != nil else {
-            return .error("Pressed Track › \(title) but the track count is still \(before)")
+            return .failedAfterActing("Pressed Track › \(title) but the track count is still \(before)")
         }
         return .success("{\"created\":\"\(title)\",\"track_count\":\(before + 1)}")
     }
@@ -528,13 +563,13 @@ actor AccessibilityChannel: Channel {
             return title
         }
         guard let undo else {
-            return .error("Pressed \(path.joined(separator: " › ")) but Logic recorded no edit")
+            return .failedAfterActing("Pressed \(path.joined(separator: " › ")) but Logic recorded no edit")
         }
         // Edit › Delete removes whatever has focus. Deleting tracks this way is never intended
         // (track deletion is logic_tracks delete), so take it straight back.
         if undo.hasSuffix("Tracks") || undo.hasSuffix("Track") {
             _ = pressEditMenuItem(prefix: "Undo")
-            return .error("\(path.joined(separator: " › ")) would have deleted tracks (\(undo)); undone. Select regions first.")
+            return .failedAfterActing("\(path.joined(separator: " › ")) would have deleted tracks (\(undo)); undone. Select regions first.")
         }
         return .success("{\"pressed\":\"\(path.joined(separator: " › "))\",\"undo\":\"\(undo)\"}")
     }
@@ -557,7 +592,7 @@ actor AccessibilityChannel: Channel {
         guard let undo else { return .success("{\"cleared\":0,\"note\":\"no regions to delete\"}") }
         if undo.hasSuffix("Tracks") || undo.hasSuffix("Track") {
             _ = pressEditMenuItem(prefix: "Undo")
-            return .error("Clearing regions would have deleted tracks (\(undo)); undone")
+            return .failedAfterActing("Clearing regions would have deleted tracks (\(undo)); undone")
         }
         return .success("{\"cleared\":true,\"undo\":\"\(undo)\"}")
     }
@@ -616,7 +651,7 @@ actor AccessibilityChannel: Channel {
         }
         let deleted = AXHelpers.poll { AXLogicProElements.allTrackHeaders().count == before - 1 ? true : nil }
         guard deleted != nil else {
-            return .error("Pressed Track › Delete Track but the track count is still \(before)")
+            return .failedAfterActing("Pressed Track › Delete Track but the track count is still \(before)")
         }
         return .success("{\"deleted\":true,\"track_count\":\(before - 1)}")
     }

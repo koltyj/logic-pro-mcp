@@ -223,6 +223,9 @@ actor ChannelRouter {
             case .unverified:
                 Log.debug("\(operation) was sent via \(channelID.rawValue) without Logic readback", subsystem: "router")
                 return result
+            case .failedAfterActing(let msg):
+                Log.debug("\(operation) acted via \(channelID.rawValue) but was not confirmed: \(msg)", subsystem: "router")
+                return result
             case .error(let msg):
                 Log.debug("\(operation) failed via \(channelID.rawValue): \(msg), trying next", subsystem: "router")
                 errors.append("\(channelID.rawValue): \(msg)")

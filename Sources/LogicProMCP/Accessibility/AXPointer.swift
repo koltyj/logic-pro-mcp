@@ -29,6 +29,19 @@ enum AXPointer {
     }
 }
 
+extension AXPointer {
+    /// Posts a key press to the HID stream; the caller must have made Logic frontmost.
+    static func pressKey(_ keyCode: CGKeyCode, flags: CGEventFlags = []) {
+        let source = CGEventSource(stateID: .hidSystemState)
+        for isDown in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: isDown) else { return }
+            event.flags = flags
+            event.post(tap: .cghidEventTap)
+            usleep(20_000)
+        }
+    }
+}
+
 private extension AXPointer {
     /// Pages the nearest enclosing scroll area until `element` is fully inside its visible frame.
     /// Off-screen track rows still report positions, but those points show other controls.
