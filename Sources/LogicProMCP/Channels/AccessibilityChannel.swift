@@ -26,7 +26,8 @@ actor AccessibilityChannel: Channel {
     }
 
     func execute(operation: String, params: [String: String]) async -> ChannelResult {
-        guard ProcessUtils.isLogicProRunning else {
+        // Opening a project is how Logic gets launched, so it alone runs without Logic.
+        guard ProcessUtils.isLogicProRunning || operation == "project.open" else {
             return .error("Logic Pro is not running")
         }
 
@@ -477,6 +478,7 @@ actor AccessibilityChannel: Channel {
         if AXLogicProElements.openProjectPaths().contains(target) {
             return .success("{\"opened\":\"\(target)\",\"already\":true}")
         }
+        let launching = !ProcessUtils.isLogicProRunning
         // `open` returns immediately; AppleScript's open blocks while Logic shows a dialog.
         let launcher = Process()
         launcher.executableURL = URL(fileURLWithPath: "/usr/bin/open")
@@ -488,15 +490,20 @@ actor AccessibilityChannel: Channel {
             return .error("Failed to open \(target): \(error.localizedDescription)")
         }
         // Stop waiting as soon as Logic asks something (missing files, MIDI ports, ...).
-        let outcome = AXHelpers.poll(attempts: 150, interval: 100_000) { () -> String? in
+        // Cold-launching Logic takes longer than opening a project in a running Logic.
+        let outcome = AXHelpers.poll(attempts: launching ? 450 : 150, interval: 100_000) { () -> String? in
             if AXLogicProElements.openProjectPaths().contains(target) { return "" }
             return AXLogicProElements.openDialogSummary()
         }
         guard let outcome else {
-            return .failedAfterActing("\(target) did not open within 15s")
+            return .failedAfterActing("\(target) did not open within \(launching ? 45 : 15)s")
         }
         guard outcome.isEmpty else {
             return .failedAfterActing("Opening \(target) is waiting on a Logic dialog: \(outcome)")
+        }
+        // Logic often raises warnings (missing MIDI ports, files) just after the window appears.
+        if let warning = AXHelpers.poll(attempts: 30, interval: 100_000, AXLogicProElements.openDialogSummary) {
+            return .success("Opened \(target). Logic is asking: \(warning)")
         }
         return .success("{\"opened\":\"\(target)\"}")
     }
@@ -666,9 +673,12 @@ actor AccessibilityChannel: Channel {
     /// Makes Logic frontmost and raises its main window; synthetic clicks only land on the active app.
     private func bringLogicForward() async -> Bool {
         guard await ProcessUtils.ensureLogicProFrontmost() else { return false }
-        if let window = AXLogicProElements.mainWindow() {
-            AXHelpers.performAction(window, kAXRaiseAction)
+        guard let window = AXLogicProElements.mainWindow() else { return false }
+        if (AXHelpers.getAttribute(window, kAXMinimizedAttribute) as Bool?) == true {
+            AXHelpers.setAttribute(window, kAXMinimizedAttribute, kCFBooleanFalse)
+            try? await Task.sleep(for: .milliseconds(600))  // un-minimize animation
         }
+        AXHelpers.performAction(window, kAXRaiseAction)
         return true
     }
 

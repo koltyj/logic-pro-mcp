@@ -208,11 +208,15 @@ actor ChannelRouter {
                 continue
             }
 
-            let health = await channel.healthCheck()
-            guard health.available else {
-                Log.debug("Channel \(channelID.rawValue) unhealthy: \(health.detail), trying next", subsystem: "router")
-                errors.append("\(channelID.rawValue): \(health.detail)")
-                continue
+            // project.open launches Logic, so it can't require a channel that needs Logic running.
+            if operation != "project.open" {
+                let health = await channel.healthCheck()
+                guard health.available else {
+                    Log.debug("Channel \(channelID.rawValue) unhealthy: \(health.detail), trying next", subsystem: "router")
+                    errors.append("\(channelID.rawValue): \(health.detail)")
+                    continue
+                }
+
             }
 
             let result = await channel.execute(operation: operation, params: params)

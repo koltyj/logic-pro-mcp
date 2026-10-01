@@ -12,9 +12,14 @@ enum AXLogicProElements {
     }
 
     /// Get the main window element.
+    /// The main window, or the first standard project window when Logic has none (e.g. minimized).
     static func mainWindow() -> AXUIElement? {
         guard let app = appRoot() else { return nil }
-        return AXHelpers.getAttribute(app, kAXMainWindowAttribute)
+        if let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute) { return main }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.first {
+            (AXHelpers.getAttribute($0, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole
+        }
     }
 
     /// File URL of the project in the main window (AXDocument).
