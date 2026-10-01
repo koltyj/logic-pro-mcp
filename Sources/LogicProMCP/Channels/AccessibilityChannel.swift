@@ -87,6 +87,10 @@ actor AccessibilityChannel: Channel {
             return pressEditMenuItem(prefix: "Undo")
         case "edit.redo":
             return pressEditMenuItem(prefix: "Redo")
+        case "edit.select_all":
+            return pressMenuItem(["Edit", "Select All"])
+        case "edit.delete":
+            return pressMenuItem(["Edit", "Delete"], expectUndo: true)
         case "track.set_color":
             return .error("Track color setting not supported via AX")
 
@@ -502,6 +506,41 @@ actor AccessibilityChannel: Channel {
             return .error("Pressed Track › \(title) but the track count is still \(before)")
         }
         return .success("{\"created\":\"\(title)\",\"track_count\":\(before + 1)}")
+    }
+
+    /// Presses a menu item. With `expectUndo`, confirms Logic recorded an undoable edit.
+    private func pressMenuItem(_ path: [String], expectUndo: Bool = false) -> ChannelResult {
+        let undoBefore = expectUndo ? undoTitle() : nil
+        guard let item = AXLogicProElements.menuItem(path: path) else {
+            return .error("Cannot find \(path.joined(separator: " › "))")
+        }
+        guard (AXHelpers.getAttribute(item, kAXEnabledAttribute) as Bool?) ?? true else {
+            return .error("\(path.joined(separator: " › ")) is disabled (nothing selected?)")
+        }
+        guard AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Failed to press \(path.joined(separator: " › "))")
+        }
+        guard expectUndo else { return .success("{\"pressed\":\"\(path.joined(separator: " › "))\"}") }
+        let undo = AXHelpers.poll { () -> String? in
+            guard let title = undoTitle(), title != undoBefore else { return nil }
+            return title
+        }
+        guard let undo else {
+            return .error("Pressed \(path.joined(separator: " › ")) but Logic recorded no edit")
+        }
+        // Edit › Delete removes whatever has focus. Deleting tracks this way is never intended
+        // (track deletion is logic_tracks delete), so take it straight back.
+        if undo.hasSuffix("Tracks") || undo.hasSuffix("Track") {
+            _ = pressEditMenuItem(prefix: "Undo")
+            return .error("\(path.joined(separator: " › ")) would have deleted tracks (\(undo)); undone. Select regions first.")
+        }
+        return .success("{\"pressed\":\"\(path.joined(separator: " › "))\",\"undo\":\"\(undo)\"}")
+    }
+
+    private func undoTitle() -> String? {
+        guard let edit = AXLogicProElements.menuItem(path: ["Edit"]),
+              let menu = AXHelpers.getChildren(edit).first else { return nil }
+        return AXHelpers.getChildren(menu).compactMap { AXHelpers.getTitle($0) }.first { $0.hasPrefix("Undo") }
     }
 
     /// Presses Edit › Undo… / Redo… and reports which action it was ("Undo Rename Track").
