@@ -116,6 +116,32 @@ Check permission status:
 LogicProMCP --check-permissions
 ```
 
+Request the permissions (shows the macOS consent dialogs):
+
+```bash
+LogicProMCP --request-permissions
+```
+
+The Automation pane has no "add" button — an entry appears there only after an
+app has actually attempted an Apple Event. `--check-permissions` queries TCC
+without prompting, so on a fresh machine it reports `NOT GRANTED (not yet
+requested)` indefinitely. `--request-permissions` triggers the real request,
+launching Logic Pro first if needed.
+
+Two caveats:
+
+- TCC attributes the request to the **responsible process**, not to this binary.
+  Running it in Terminal grants Terminal. If an MCP client spawns the server,
+  request the permissions from that client (`logic_system("permissions")`) or the
+  grant will not apply.
+- Rebuilding changes the binary's cdhash, which invalidates grants keyed to it.
+
+If a request was previously denied, macOS will not ask again until it is reset:
+
+```bash
+tccutil reset AppleEvents <host-bundle-id>   # e.g. com.apple.Terminal
+```
+
 ## Usage
 
 Once registered, ask your AI assistant naturally:
@@ -183,6 +209,9 @@ swift test
 
 # Check permissions without starting server
 .build/debug/LogicProMCP --check-permissions
+
+# Request permissions (shows the macOS consent dialogs)
+.build/debug/LogicProMCP --request-permissions
 ```
 
 ### Project Structure
