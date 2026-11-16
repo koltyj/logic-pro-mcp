@@ -8,11 +8,17 @@ INSTALL_DIR="/usr/local/bin"
 echo "=== Logic Pro MCP Server — Install ==="
 echo ""
 
-# Detect if running from cloned repo or via curl
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# Build from source only when this script is a file inside a logic-pro-mcp checkout.
+# Piped through `curl | bash`, BASH_SOURCE is empty and we take the verified download path,
+# never a guess based on the current directory.
+PROJECT_DIR=""
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+if [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]]; then
+    PROJECT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)" || exit 1
+fi
 
-if [[ -f "$PROJECT_DIR/Package.swift" ]]; then
+if [[ -n "$PROJECT_DIR" && -f "$PROJECT_DIR/Package.swift" ]] \
+    && grep -q "name: \"$BINARY_NAME\"" "$PROJECT_DIR/Package.swift"; then
     echo "Building from source..."
     cd "$PROJECT_DIR"
     swift build -c release --arch arm64 --arch x86_64 2>&1

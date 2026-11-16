@@ -42,8 +42,6 @@ actor AccessibilityChannel: Channel {
             return toggleTransportButton(named: "Metronome")
         case "transport.set_tempo":
             return setTempo(params: params)
-        case "transport.set_cycle_range":
-            return setCycleRange(params: params)
 
         // MARK: - Track reads
         case "track.get_tracks":
@@ -55,11 +53,11 @@ actor AccessibilityChannel: Channel {
         case "track.select":
             return selectTrack(params: params)
         case "track.set_mute":
-            return setTrackToggle(params: params, button: "Mute")
+            return setTrackToggle(params: params, button: "Mute", stateKey: "muted")
         case "track.set_solo":
-            return setTrackToggle(params: params, button: "Solo")
+            return setTrackToggle(params: params, button: "Solo", stateKey: "soloed")
         case "track.set_arm":
-            return setTrackToggle(params: params, button: "Record")
+            return setTrackToggle(params: params, button: "Record", stateKey: "armed")
         case "track.rename":
             return renameTrack(params: params)
         case "track.set_color":
@@ -172,14 +170,6 @@ actor AccessibilityChannel: Channel {
         return .error("Cannot locate tempo field")
     }
 
-    private func setCycleRange(params: [String: String]) -> ChannelResult {
-        // Cycle range setting via AX is fragile — requires locating the cycle locators
-        guard let _ = params["start"], let _ = params["end"] else {
-            return .error("Missing 'start' and/or 'end' parameters")
-        }
-        return .error("Cycle range setting not yet fully implemented via AX")
-    }
-
     // MARK: - Tracks
 
     private func getTracks() -> ChannelResult {
@@ -219,9 +209,14 @@ actor AccessibilityChannel: Channel {
         return .success("{\"selected\":\(index)}")
     }
 
-    private func setTrackToggle(params: [String: String], button buttonName: String) -> ChannelResult {
+    private func setTrackToggle(
+        params: [String: String], button buttonName: String, stateKey: String
+    ) -> ChannelResult {
         guard let indexStr = params["index"], let index = Int(indexStr) else {
             return .error("Missing or invalid 'index' parameter")
+        }
+        guard let desired = params[stateKey].flatMap(Bool.init) else {
+            return .error("Missing or invalid '\(stateKey)' parameter")
         }
         let finder: (Int) -> AXUIElement? = switch buttonName {
         case "Mute": AXLogicProElements.findTrackMuteButton
@@ -232,10 +227,17 @@ actor AccessibilityChannel: Channel {
         guard let button = finder(index) else {
             return .error("Cannot find \(buttonName) button on track \(index)")
         }
-        guard AXHelpers.performAction(button, kAXPressAction) else {
-            return .error("Failed to click \(buttonName) on track \(index)")
+        // AXPress toggles, so press only when the current state differs from the request.
+        guard let current = AXValueExtractors.extractCheckboxState(button)
+            ?? AXValueExtractors.extractButtonState(button) else {
+            return .error("Cannot read \(buttonName) state on track \(index); not toggling blind")
         }
-        return .success("{\"track\":\(index),\"toggled\":\"\(buttonName)\"}")
+        if current != desired {
+            guard AXHelpers.performAction(button, kAXPressAction) else {
+                return .error("Failed to click \(buttonName) on track \(index)")
+            }
+        }
+        return .success("{\"track\":\(index),\"\(stateKey)\":\(desired),\"changed\":\(current != desired)}")
     }
 
     private func renameTrack(params: [String: String]) -> ChannelResult {
