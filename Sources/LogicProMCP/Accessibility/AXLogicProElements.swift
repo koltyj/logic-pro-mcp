@@ -166,6 +166,33 @@ enum AXLogicProElements {
         return stripControl(strip, role: kAXSliderRole, description: StripControl.pan)
     }
 
+    /// Find the master strip's volume fader. Logic Pro normally labels it
+    /// "Master"; "Stereo Out" is the output-strip fallback used by layouts
+    /// that do not expose a separate master strip.
+    static func findMasterFader() -> AXUIElement? {
+        let strips = mixerStrips()
+        let descriptions = strips.map { AXHelpers.getDescription($0) }
+        for index in masterStripCandidateIndices(descriptions: descriptions) {
+            if let fader = stripControl(
+                strips[index], role: kAXSliderRole, description: StripControl.volume
+            ) {
+                return fader
+            }
+        }
+        return nil
+    }
+
+    static func masterStripCandidateIndices(descriptions: [String?]) -> [Int] {
+        func indices(matching expectedDescription: String) -> [Int] {
+            descriptions.indices.filter {
+                descriptions[$0]?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .localizedCaseInsensitiveCompare(expectedDescription) == .orderedSame
+            }
+        }
+        return indices(matching: "Master") + indices(matching: "Stereo Out")
+    }
+
     // MARK: - Menu Bar
 
     /// Get the menu bar for Logic Pro.
