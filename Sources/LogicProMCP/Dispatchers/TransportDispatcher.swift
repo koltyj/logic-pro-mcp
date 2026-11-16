@@ -8,11 +8,10 @@ struct TransportDispatcher {
             Control Logic Pro transport. \
             Commands: play, stop, record, pause, rewind, fast_forward, \
             toggle_cycle, toggle_metronome, set_tempo, goto_position, \
-            set_cycle_range, toggle_count_in. \
+            toggle_count_in. \
             Params by command: \
             set_tempo -> { tempo: Float } (20.0-999.0); \
             goto_position -> { bar: Int } or { time: "HH:MM:SS:FF" }; \
-            set_cycle_range -> { start: Int, end: Int } (bar numbers); \
             Others -> {} (no params)
             """,
         inputSchema: .object([
@@ -123,30 +122,15 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_cycle_range":
-            let start: Int
-            let end: Int
-            switch InputValidation.int(params, keys: ["start"], default: 1, range: 1...999_999, label: "start") {
-            case .success(let value): start = value
-            case .failure(let message):
-                return CallTool.Result(content: [.text(message)], isError: true)
-            }
-            switch InputValidation.int(params, keys: ["end"], default: 5, range: 1...999_999, label: "end") {
-            case .success(let value): end = value
-            case .failure(let message):
-                return CallTool.Result(content: [.text(message)], isError: true)
-            }
-            guard end >= start else {
-                return CallTool.Result(content: [.text("end must be greater than or equal to start")], isError: true)
-            }
-            let result = await router.route(
-                operation: "transport.set_cycle_range",
-                params: ["start": "\(start).1.1.1", "end": "\(end).1.1.1"]
+            // Hidden until it can be tested live; see issue #37 for the Set Locator route.
+            return CallTool.Result(
+                content: [.text("set_cycle_range is not supported yet. Use toggle_cycle, or set the locators in Logic Pro.")],
+                isError: true
             )
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         default:
             return CallTool.Result(
-                content: [.text("Unknown transport command: \(command). Available: play, stop, record, pause, rewind, fast_forward, toggle_cycle, toggle_metronome, set_tempo, goto_position, set_cycle_range, toggle_count_in")],
+                content: [.text("Unknown transport command: \(command). Available: play, stop, record, pause, rewind, fast_forward, toggle_cycle, toggle_metronome, set_tempo, goto_position, toggle_count_in")],
                 isError: true
             )
         }

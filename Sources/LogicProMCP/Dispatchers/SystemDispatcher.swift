@@ -107,7 +107,6 @@ struct SystemDispatcher {
                   toggle_count_in   -> {} — Toggle count-in
                   set_tempo         -> { tempo: Float } — Set BPM (20-999)
                   goto_position     -> { bar: Int } or { time: "HH:MM:SS:FF" }
-                  set_cycle_range   -> { start: Int, end: Int } — Bar numbers
 
                 Read state via resource: logic://transport/state
                 """
