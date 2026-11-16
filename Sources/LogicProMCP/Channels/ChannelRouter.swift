@@ -20,7 +20,10 @@ actor ChannelRouter {
         "transport.fast_forward":     [.coreMIDI, .cgEvent],
         "transport.toggle_cycle":     [.cgEvent, .accessibility],
         "transport.toggle_metronome": [.cgEvent, .accessibility],
-        "transport.set_tempo":        [.osc, .accessibility],
+        // Accessibility first: route() returns on the first non-error result,
+        // and OSC can only ever answer .unverified, so listing OSC first meant
+        // the channel that can read the tempo back never ran at all.
+        "transport.set_tempo":        [.accessibility, .osc],
         "transport.get_state":        [.accessibility],
         "transport.goto_position":    [.coreMIDI, .cgEvent],
         "transport.set_cycle_range":  [.accessibility],
@@ -172,6 +175,13 @@ actor ChannelRouter {
 
     /// Route an operation through its fallback chain.
     /// Returns the result from the first channel that succeeds.
+    /// The fallback chain for an operation, or an empty array if unrouted.
+    /// Exposed so tests can pin an operation's channel order without standing
+    /// up the channels themselves.
+    static func channelChain(for operation: String) -> [ChannelID] {
+        routingTable[operation] ?? []
+    }
+
     func route(operation: String, params: [String: String] = [:]) async -> ChannelResult {
         guard let chain = Self.routingTable[operation] else {
             return .error("Unknown operation: \(operation)")
@@ -208,6 +218,14 @@ actor ChannelRouter {
             case .error(let msg):
                 Log.debug("\(operation) failed via \(channelID.rawValue): \(msg), trying next", subsystem: "router")
                 lastError = msg
+            case .terminal(let msg):
+                // The channel knows the answer. Every channel below it is a
+                // weaker way to do the same thing — for set_tempo, one that
+                // cannot read the tempo back at all — so falling through
+                // would replace a known failure with an unverifiable claim
+                // of success.
+                Log.debug("\(operation) answered conclusively by \(channelID.rawValue): \(msg), not trying others", subsystem: "router")
+                return result
             }
         }
 

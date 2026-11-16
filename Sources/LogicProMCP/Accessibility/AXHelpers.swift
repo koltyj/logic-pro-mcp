@@ -40,6 +40,20 @@ enum AXHelpers {
         return result
     }
 
+    /// Set an attribute, returning the AX error rather than a Bool.
+    /// Callers that retry need to tell a refusal apart from a transient
+    /// kAXErrorCannotComplete, which Logic Pro returns while it is busy.
+    static func setAttributeResult(
+        _ element: AXUIElement, _ attribute: String, _ value: CFTypeRef
+    ) -> AXError {
+        AXUIElementSetAttributeValue(element, attribute as CFString, value)
+    }
+
+    /// Perform an action, returning the AX error rather than a Bool.
+    static func performActionResult(_ element: AXUIElement, _ action: String) -> AXError {
+        AXUIElementPerformAction(element, action as CFString)
+    }
+
     /// Perform a named action on an AX element (e.g. kAXPressAction).
     /// Returns true on success.
     @discardableResult
@@ -56,6 +70,12 @@ enum AXHelpers {
     /// Get the title of an element.
     static func getTitle(_ element: AXUIElement) -> String? {
         getAttribute(element, kAXTitleAttribute)
+    }
+
+    /// Subrole, e.g. AXStandardWindow. Distinguishes a project window from a
+    /// plugin editor or a dialog, which share the AXWindow role.
+    static func getSubrole(_ element: AXUIElement) -> String? {
+        getAttribute(element, kAXSubroleAttribute)
     }
 
     /// Get the identifier of an element.

@@ -31,6 +31,9 @@ struct TransportDispatcher {
         ])
     )
 
+    static let missingTempoMessage =
+        #"set_tempo needs a tempo inside params, e.g. {"command": "set_tempo", "params": {"tempo": 120}}"#
+
     static func handle(
         command: String,
         params: [String: Value],
@@ -75,11 +78,22 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_tempo":
+            // No default. This used to fall back to 120, so any request that
+            // lost its tempo reset the project to 120 without being asked to.
+            // The usual way to lose it is to put `tempo` beside `command`
+            // instead of inside `params` — the server only reads `params` —
+            // which is exactly the mistake a model makes from the tool
+            // description alone. Say where it goes, so the retry lands.
+            guard params["tempo"] != nil || params["bpm"] != nil else {
+                return CallTool.Result(
+                    content: [.text(Self.missingTempoMessage)],
+                    isError: true
+                )
+            }
             let tempo: Double
             switch InputValidation.double(
                 params,
                 keys: ["tempo", "bpm"],
-                default: 120,
                 range: 20...999,
                 label: "tempo"
             ) {
@@ -89,7 +103,7 @@ struct TransportDispatcher {
             }
             let result = await router.route(
                 operation: "transport.set_tempo",
-                params: ["bpm": String(tempo)]
+                params: [ChannelParam.tempo: String(tempo)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 

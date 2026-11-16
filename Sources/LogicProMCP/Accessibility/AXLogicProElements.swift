@@ -11,10 +11,43 @@ enum AXLogicProElements {
         return AXHelpers.axApp(pid: pid)
     }
 
-    /// Get the main window element.
+    /// Get the window every element lookup starts from.
+    ///
+    /// `AXMainWindow` is the right answer when there is one, but Logic Pro
+    /// stops publishing it once the app is no longer active: the attribute
+    /// answers kAXErrorNoValue (-25212) and the project window reports
+    /// `AXMain = false`, while `AXWindows` still lists it perfectly well.
+    /// Every element finder in this file goes through here, so returning nil
+    /// in that state takes the whole Accessibility channel down — and because
+    /// the router falls through to a channel that cannot verify anything,
+    /// `set_tempo` then answers "sent via OSC" while the tempo never moves.
+    /// Logic Pro not being frontmost is the normal case for a background
+    /// server, so fall back rather than give up.
     static func mainWindow() -> AXUIElement? {
         guard let app = appRoot() else { return nil }
-        return AXHelpers.getAttribute(app, kAXMainWindowAttribute)
+        if let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute) {
+            return main
+        }
+        // The focused window only counts if it is a project window. Logic Pro
+        // raises alerts on its own — "The last selected audio interface is not
+        // available" appears at launch whenever an interface is unplugged — and
+        // an alert takes focus with subrole AXDialog. Taking it at its word
+        // sent every lookup into a window with two labels and two buttons, and
+        // set_tempo answered "sent via OSC" for a tempo that never moved.
+        if let focused: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute),
+           isProjectWindow(focused) {
+            return focused
+        }
+        // Last resort: the first ordinary window. With several projects open it
+        // may pick the wrong one, which is still better than reaching nothing.
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.first(where: isProjectWindow)
+    }
+
+    /// Whether a window can hold the Control Bar and the track area.
+    /// Alerts and sheets report AXDialog (measured on Logic Pro 12.2).
+    private static func isProjectWindow(_ window: AXUIElement) -> Bool {
+        AXHelpers.getSubrole(window) == (kAXStandardWindowSubrole as String)
     }
 
     // MARK: - Transport
@@ -57,6 +90,19 @@ enum AXLogicProElements {
             }
         }
         return nil
+    }
+
+    /// The Control Bar's tempo control.
+    ///
+    /// Logic Pro exposes it as an AXSlider described "Tempo". There is no
+    /// editable text field for the tempo anywhere in the AX tree, so a
+    /// text-field lookup finds nothing and set_tempo can only go through
+    /// this element.
+    static func getTempoSlider() -> AXUIElement? {
+        guard let transport = getTransportBar() else { return nil }
+        return AXHelpers.findDescendant(
+            of: transport, role: kAXSliderRole, description: "Tempo", maxDepth: 4
+        )
     }
 
     // MARK: - Tracks

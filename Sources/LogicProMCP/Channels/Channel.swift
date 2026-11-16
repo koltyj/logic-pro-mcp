@@ -6,10 +6,30 @@ enum ChannelResult: Sendable {
     case unverified(String)
     case error(String)
 
+    /// The channel's answer is final: the router must not try another channel.
+    ///
+    /// Two situations produce it, and they share the property that matters —
+    /// the channel knows the state of the thing it was asked to change, so a
+    /// weaker channel can only obscure that:
+    ///
+    /// - A deliberate refusal, e.g. `set_tempo` declining a second request
+    ///   while the first is still converging.
+    /// - A measured failure: the tempo slider was nudged and read back, and it
+    ///   did not reach the target.
+    ///
+    /// Both were observed live going out as `.error`, which the router reads as
+    /// "this channel could not try" and answers by falling through to OSC. OSC
+    /// cannot read the tempo back, so it replied "Set tempo to 300.0 BPM (sent
+    /// via OSC)" for a slider that never moved off 200. Routing around a known
+    /// answer is how a false success gets made.
+    case terminal(String)
+
     /// True when the channel accepted the operation, even if Logic cannot confirm the outcome.
     var isSuccess: Bool {
-        if case .error = self { return false }
-        return true
+        switch self {
+        case .success, .unverified: return true
+        case .error, .terminal: return false
+        }
     }
 
     var message: String {
@@ -17,6 +37,7 @@ enum ChannelResult: Sendable {
         case .success(let msg): return msg
         case .unverified(let msg): return msg
         case .error(let msg): return msg
+        case .terminal(let msg): return msg
         }
     }
 }
