@@ -163,11 +163,28 @@ Logic Pro does not expose a programmatic API. This server works within macOS pla
 
 - UI element paths may change between Logic Pro versions
 - Some deep state (automation curves, region MIDI data) is not exposed via Accessibility
-- AX element labels may be localized on non-English macOS
+- AX element labels are localized; built-in spellings cover English and Traditional Chinese (see [Localization](#localization))
 - Plugin parameter control is limited to what's visible in the UI
 - OSC channel requires manual Logic Pro Control Surface setup
 
 This is the ceiling for Logic Pro automation given Apple's constraints.
+
+### Localization
+
+Logic Pro localizes most AX descriptions, so the server matches every known
+spelling of each label (`Sources/LogicProMCP/Accessibility/AXLabels.swift`).
+English and Traditional Chinese are built in. To add a language:
+
+1. Run `swift Scripts/ax-dump.swift 8` with Logic Pro open (add `--focused`
+   to dump an open dialog) and note the descriptions Logic shows.
+2. Add them to `AXLabels.swift` and open a PR, or, without rebuilding, point
+   `LOGIC_PRO_MCP_AX_LABELS` at a JSON file of extra spellings:
+
+```json
+{ "mute": ["Stumm"], "mixer": ["Mixer"] }
+```
+
+The keys are the label keys in `AXLabels.swift`.
 
 ## Development
 

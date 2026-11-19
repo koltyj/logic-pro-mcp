@@ -90,10 +90,10 @@ enum AXValueExtractors {
     /// Read a track header and extract its basic state.
     static func extractTrackState(from header: AXUIElement, index: Int) -> TrackState {
         let name = extractTrackName(from: header)
-        let muted = extractToggleState(from: header, description: "Mute") ?? false
-        let soloed = extractToggleState(from: header, description: "Solo") ?? false
-        let armed = extractToggleState(from: header, description: "Record Enable")
-            ?? extractToggleState(from: header, description: "Record")
+        let muted = extractToggleState(from: header, label: AXLabels.mute) ?? false
+        let soloed = extractToggleState(from: header, label: AXLabels.solo) ?? false
+        let armed = extractToggleState(from: header, label: AXLabels.recordEnable)
+            ?? extractToggleState(from: header, label: AXLabels.record)
             ?? false
         let selected = isTrackSelected(header)
         let trackType = inferTrackType(from: header)
@@ -243,16 +243,16 @@ enum AXValueExtractors {
         return AXHelpers.getTitle(header) ?? "Untitled"
     }
 
-    private static func extractToggleState(from header: AXUIElement, description: String) -> Bool? {
+    private static func extractToggleState(from header: AXUIElement, label: AXLabel) -> Bool? {
         if let checkbox = AXHelpers.findDescendant(
-            of: header, role: kAXCheckBoxRole, description: description, maxDepth: 4
+            of: header, role: kAXCheckBoxRole, description: label, maxDepth: 4
         ) {
             return extractCheckboxState(checkbox) ?? extractButtonState(checkbox)
         }
         let buttons = AXHelpers.findAllDescendants(of: header, role: kAXButtonRole, maxDepth: 4)
         for button in buttons {
             let desc = AXHelpers.getDescription(button) ?? AXHelpers.getTitle(button) ?? ""
-            if desc.hasPrefix(description) || desc.lowercased().contains(description.lowercased()) {
+            if label.isContained(in: desc) {
                 return extractButtonState(button)
             }
         }
@@ -261,7 +261,7 @@ enum AXValueExtractors {
 
     private static func extractHasFocus(from header: AXUIElement) -> Bool? {
         guard let focus = AXHelpers.findDescendant(
-            of: header, role: kAXRadioButtonRole, description: "Has Focus", maxDepth: 4
+            of: header, role: kAXRadioButtonRole, description: AXLabels.hasFocus, maxDepth: 4
         ) else {
             return nil
         }

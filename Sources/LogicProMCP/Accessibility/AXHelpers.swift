@@ -113,6 +113,57 @@ enum AXHelpers {
         return nil
     }
 
+    /// Find a direct child whose AXDescription matches any spelling of `label`.
+    static func findChild(
+        of element: AXUIElement,
+        role: String? = nil,
+        description label: AXLabel
+    ) -> AXUIElement? {
+        getChildren(element).first { child in
+            (role == nil || getRole(child) == role) && label.matches(getDescription(child))
+        }
+    }
+
+    /// Recursive search for an element whose AXDescription matches any spelling of `label`.
+    static func findDescendant(
+        of element: AXUIElement,
+        role: String? = nil,
+        description label: AXLabel,
+        maxDepth: Int = 10
+    ) -> AXUIElement? {
+        findDescendant(of: element, maxDepth: maxDepth) { child in
+            (role == nil || getRole(child) == role) && label.matches(getDescription(child))
+        }
+    }
+
+    /// Recursive search for an element whose AXTitle matches any spelling of `label`.
+    static func findDescendant(
+        of element: AXUIElement,
+        role: String? = nil,
+        title label: AXLabel,
+        maxDepth: Int = 10
+    ) -> AXUIElement? {
+        findDescendant(of: element, maxDepth: maxDepth) { child in
+            (role == nil || getRole(child) == role) && label.matches(getTitle(child))
+        }
+    }
+
+    /// Depth-first search with an arbitrary predicate.
+    static func findDescendant(
+        of element: AXUIElement,
+        maxDepth: Int = 10,
+        where predicate: (AXUIElement) -> Bool
+    ) -> AXUIElement? {
+        guard maxDepth > 0 else { return nil }
+        for child in getChildren(element) {
+            if predicate(child) { return child }
+            if let found = findDescendant(of: child, maxDepth: maxDepth - 1, where: predicate) {
+                return found
+            }
+        }
+        return nil
+    }
+
     /// Collect all descendants matching criteria. Useful for enumerating track headers, etc.
     static func findAllDescendants(
         of element: AXUIElement,

@@ -162,8 +162,7 @@ actor AccessibilityChannel: Channel {
         // Find the tempo text field and set its value
         let texts = AXHelpers.findAllDescendants(of: transport, role: kAXTextFieldRole, maxDepth: 4)
         for field in texts {
-            let desc = AXHelpers.getDescription(field)?.lowercased() ?? ""
-            if desc.contains("tempo") || desc.contains("bpm") {
+            if AXLabels.tempo.isContained(in: AXHelpers.getDescription(field)) {
                 AXHelpers.setAttribute(field, kAXValueAttribute, tempoStr as CFTypeRef)
                 AXHelpers.performAction(field, kAXConfirmAction)
                 return .success("{\"tempo\":\(tempoStr)}")
@@ -302,7 +301,9 @@ actor AccessibilityChannel: Channel {
             name: AXHelpers.getDescription(strip),
             volume: fader.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
             pan: panKnob.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
-            eqEnabled: eqButton.flatMap { AXHelpers.getAttribute($0, kAXValueAttribute) } == "on"
+            eqEnabled: AXLabels.onState.matches(
+                eqButton.flatMap { AXHelpers.getAttribute($0, kAXValueAttribute) }
+            )
         )
     }
 
