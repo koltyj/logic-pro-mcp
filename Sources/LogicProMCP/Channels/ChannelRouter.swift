@@ -107,7 +107,8 @@ actor ChannelRouter {
         "project.save_as":            [.appleScript],
         "project.close":              [.cgEvent, .appleScript],
         "project.get_info":           [.accessibility],
-        "project.bounce":             [.cgEvent, .accessibility],
+        "project.bounce":             [.cgEvent],
+        "project.bounce_export":      [.accessibility],
         "project.is_running":         [],  // No channel needed — pure process check
 
         // Views — keyboard toggle

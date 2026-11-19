@@ -76,13 +76,17 @@ enum AXLabels {
     static let metronome = make("metronome", ["Metronome", "節拍器卡嗒聲"])
     static let tempo = make("tempo", ["tempo", "bpm", "拍速"])
 
+    // MARK: Dialogs
+    static let ok = make("ok", ["OK", "好"])
+    static let replace = make("replace", ["Replace", "取代"])
+
     /// Map a legacy English control name to its label, so callers that still
     /// pass "Cycle"/"Mute"/... keep working in every language.
     static func label(forEnglishName name: String) -> AXLabel {
         let known: [AXLabel] = [
             controlBar, tracksHeader, mixer, volumeFader, pan, eq, masterStrip,
             stereoOutStrip, bypass, onState, mute, solo, recordEnable, record,
-            hasFocus, cycle, metronome, tempo,
+            hasFocus, cycle, metronome, tempo, ok, replace,
         ]
         return known.first { $0.variants.first?.caseInsensitiveCompare(name) == .orderedSame }
             ?? AXLabel(key: name, variants: [name])

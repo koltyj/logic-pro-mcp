@@ -111,6 +111,10 @@ actor AccessibilityChannel: Channel {
         case "plugin.insert", "plugin.remove":
             return .error("Plugin insert/remove are not implemented via AX")
 
+        // MARK: - Bounce
+        case "project.bounce_export":
+            return await AXBounce.run(params: params)
+
         // MARK: - Automation
         case "automation.get_mode":
             return .error("Automation mode reading not yet implemented via AX")

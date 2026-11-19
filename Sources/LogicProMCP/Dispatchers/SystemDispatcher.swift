@@ -209,6 +209,8 @@ struct SystemDispatcher {
                   save_as           -> { path: String } — Save to new path
                   close             -> {} — Close project
                   bounce            -> {} — Open bounce dialog
+                  bounce            -> { directory, filename, file_type?, bit_depth?, sample_rate?, overwrite?, timeout_seconds? }
+                                       — Bounce to one PCM file and wait for it; returns { path, bytes }
                   launch            -> {} — Launch Logic Pro
                   quit              -> {} — Quit Logic Pro
 

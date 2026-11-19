@@ -39,7 +39,7 @@ Each command routes through the fastest available channel, with automatic fallba
 | `logic_midi` | send_note, send_cc, send_chord, mmc_play... | `logic_midi("send_note", {note: 60, velocity: 100, channel: 1, duration_ms: 500})` |
 | `logic_edit` | undo, redo, cut, copy, paste, quantize, split... | `logic_edit("quantize", {value: "1/16"})` |
 | `logic_navigate` | goto_bar, create_marker, toggle_view, set_zoom... | `logic_navigate("toggle_view", {view: "mixer"})` |
-| `logic_project` | new, open, save, bounce, launch, quit | `logic_project("open", {path: "/path/to/song.logicx"})` |
+| `logic_project` | new, open, save, bounce, launch, quit | `logic_project("bounce", {directory: "~/Music/Bounces", filename: "mix", bit_depth: 24})` |
 | `logic_system` | health, permissions, refresh_cache, help | `logic_system("help", {category: "transport"})` |
 
 ### Resources (7 URIs — zero context cost)
@@ -169,6 +169,29 @@ Logic Pro does not expose a programmatic API. This server works within macOS pla
 - OSC channel requires manual Logic Pro Control Surface setup
 
 This is the ceiling for Logic Pro automation given Apple's constraints.
+
+### Bouncing
+
+`logic_project("bounce", {...})` with a `directory` and `filename` runs the whole
+Bounce flow and returns once the file is written:
+
+```
+logic_project("bounce", {
+  directory: "~/Music/Bounces",   // must exist
+  filename: "mix",                // ".wav" is added for you
+  file_type: "wav",               // wav | aiff | caf (default wav)
+  bit_depth: 24,                  // 16 | 24 | 32 (float); omit to keep Logic's setting
+  sample_rate: 48000,             // omit to keep Logic's setting
+  overwrite: false,
+  timeout_seconds: 600
+})
+→ {"path": "/Users/you/Music/Bounces/mix.wav", "bytes": 83361392}
+```
+
+It writes exactly one PCM file (other destinations such as MP3 are switched off),
+bounces the range Logic would use (the cycle range when Cycle is on), and drives
+the dialog by role, identifier and value rather than by localized text. Without
+parameters, `bounce` just opens the dialog as before.
 
 ### Localization
 
