@@ -35,11 +35,11 @@ Each command routes through the fastest available channel, with automatic fallba
 |------|----------|----------|
 | `logic_transport` | play, stop, record, set_tempo, goto_position... | `logic_transport("set_tempo", {tempo: 140})` |
 | `logic_tracks` | select, create_audio, mute, solo, arm, rename... | `logic_tracks("mute", {index: 2, enabled: true})` |
-| `logic_mixer` | set_volume, set_pan, insert_plugin, bypass_plugin... | `logic_mixer("set_volume", {track: 0, value: 0.8})` |
+| `logic_mixer` | set_volume, set_pan, list_plugins, bypass_plugin... | `logic_mixer("list_plugins", {track: 0})` |
 | `logic_midi` | send_note, send_cc, send_chord, mmc_play... | `logic_midi("send_note", {note: 60, velocity: 100, channel: 1, duration_ms: 500})` |
 | `logic_edit` | undo, redo, cut, copy, paste, quantize, split... | `logic_edit("quantize", {value: "1/16"})` |
 | `logic_navigate` | goto_bar, create_marker, toggle_view, set_zoom... | `logic_navigate("toggle_view", {view: "mixer"})` |
-| `logic_project` | new, open, save, bounce, launch, quit | `logic_project("open", {path: "/path/to/song.logicx"})` |
+| `logic_project` | new, open, save, bounce, launch, quit | `logic_project("bounce", {directory: "~/Music/Bounces", filename: "mix", bit_depth: 24})` |
 | `logic_system` | health, permissions, refresh_cache, help | `logic_system("help", {category: "transport"})` |
 
 ### Resources (7 URIs — zero context cost)
@@ -163,11 +163,52 @@ Logic Pro does not expose a programmatic API. This server works within macOS pla
 
 - UI element paths may change between Logic Pro versions
 - Some deep state (automation curves, region MIDI data) is not exposed via Accessibility
-- AX element labels may be localized on non-English macOS
+- AX element labels are localized; built-in spellings cover English and Traditional Chinese (see [Localization](#localization))
+- Plugin names come from the channel strip as displayed, so long names are truncated (e.g. `RX 10 Repa`), and inserts are only readable while the strip's insert area is visible
 - Plugin parameter control is limited to what's visible in the UI
 - OSC channel requires manual Logic Pro Control Surface setup
 
 This is the ceiling for Logic Pro automation given Apple's constraints.
+
+### Bouncing
+
+`logic_project("bounce", {...})` with a `directory` and `filename` runs the whole
+Bounce flow and returns once the file is written:
+
+```
+logic_project("bounce", {
+  directory: "~/Music/Bounces",   // must exist
+  filename: "mix",                // ".wav" is added for you
+  file_type: "wav",               // wav | aiff | caf (default wav)
+  bit_depth: 24,                  // 16 | 24 | 32 (float); omit to keep Logic's setting
+  sample_rate: 48000,             // omit to keep Logic's setting
+  overwrite: false,
+  timeout_seconds: 600
+})
+→ {"path": "/Users/you/Music/Bounces/mix.wav", "bytes": 83361392}
+```
+
+It writes exactly one PCM file (other destinations such as MP3 are switched off),
+bounces the range Logic would use (the cycle range when Cycle is on), and drives
+the dialog by role, identifier and value rather than by localized text. Without
+parameters, `bounce` just opens the dialog as before.
+
+### Localization
+
+Logic Pro localizes most AX descriptions, so the server matches every known
+spelling of each label (`Sources/LogicProMCP/Accessibility/AXLabels.swift`).
+English and Traditional Chinese are built in. To add a language:
+
+1. Run `swift Scripts/ax-dump.swift 8` with Logic Pro open (add `--focused`
+   to dump an open dialog) and note the descriptions Logic shows.
+2. Add them to `AXLabels.swift` and open a PR, or, without rebuilding, point
+   `LOGIC_PRO_MCP_AX_LABELS` at a JSON file of extra spellings:
+
+```json
+{ "mute": ["Stumm"], "mixer": ["Mixer"], "bypass": ["Bypass"] }
+```
+
+The keys are the label keys in `AXLabels.swift`.
 
 ## Development
 

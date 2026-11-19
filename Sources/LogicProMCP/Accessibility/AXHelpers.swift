@@ -113,6 +113,57 @@ enum AXHelpers {
         return nil
     }
 
+    /// Find a direct child whose AXDescription matches any spelling of `label`.
+    static func findChild(
+        of element: AXUIElement,
+        role: String? = nil,
+        description label: AXLabel
+    ) -> AXUIElement? {
+        getChildren(element).first { child in
+            (role == nil || getRole(child) == role) && label.matches(getDescription(child))
+        }
+    }
+
+    /// Recursive search for an element whose AXDescription matches any spelling of `label`.
+    static func findDescendant(
+        of element: AXUIElement,
+        role: String? = nil,
+        description label: AXLabel,
+        maxDepth: Int = 10
+    ) -> AXUIElement? {
+        findDescendant(of: element, maxDepth: maxDepth) { child in
+            (role == nil || getRole(child) == role) && label.matches(getDescription(child))
+        }
+    }
+
+    /// Recursive search for an element whose AXTitle matches any spelling of `label`.
+    static func findDescendant(
+        of element: AXUIElement,
+        role: String? = nil,
+        title label: AXLabel,
+        maxDepth: Int = 10
+    ) -> AXUIElement? {
+        findDescendant(of: element, maxDepth: maxDepth) { child in
+            (role == nil || getRole(child) == role) && label.matches(getTitle(child))
+        }
+    }
+
+    /// Depth-first search with an arbitrary predicate.
+    static func findDescendant(
+        of element: AXUIElement,
+        maxDepth: Int = 10,
+        where predicate: (AXUIElement) -> Bool
+    ) -> AXUIElement? {
+        guard maxDepth > 0 else { return nil }
+        for child in getChildren(element) {
+            if predicate(child) { return child }
+            if let found = findDescendant(of: child, maxDepth: maxDepth - 1, where: predicate) {
+                return found
+            }
+        }
+        return nil
+    }
+
     /// Collect all descendants matching criteria. Useful for enumerating track headers, etc.
     static func findAllDescendants(
         of element: AXUIElement,
@@ -154,6 +205,28 @@ enum AXHelpers {
         let result = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value)
         guard result == .success else { return nil }
         return value
+    }
+
+    /// Re-run `probe` every 100 ms until it returns a value or `seconds` pass.
+    /// Logic Pro applies many AX actions asynchronously, so a value read
+    /// straight after a press is often the old one.
+    static func poll<T>(seconds: Double, _ probe: () -> T?) async -> T? {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            if let value = probe() { return value }
+            try? await Task.sleep(for: .milliseconds(100))
+        } while Date() < deadline && !Task.isCancelled
+        return probe()
+    }
+
+    /// Get the on-screen position of an element (kAXPositionAttribute).
+    static func getPosition(_ element: AXUIElement) -> CGPoint? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &value) == .success,
+              let axValue = value, CFGetTypeID(axValue) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        guard AXValueGetValue(axValue as! AXValue, .cgPoint, &point) else { return nil }
+        return point
     }
 
     /// Get the description of an element (kAXDescriptionAttribute).

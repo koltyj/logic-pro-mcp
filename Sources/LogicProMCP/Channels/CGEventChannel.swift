@@ -73,6 +73,7 @@ actor CGEventChannel: Channel {
         "project.save":               .cmd(1),          // Cmd+S
         "project.save_as":            .cmdShift(1),     // Cmd+Shift+S
         "project.close":              .cmd(13),         // Cmd+W
+        "project.bounce":             .cmd(11),         // Cmd+B (Bounce Project or Section)
 
         // Track creation
         "track.create_audio":         .cmdOption(0),    // Option+Cmd+A (approximate)

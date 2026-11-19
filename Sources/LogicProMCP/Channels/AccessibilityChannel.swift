@@ -104,8 +104,16 @@ actor AccessibilityChannel: Channel {
             return .error("Region operations not yet implemented via AX")
 
         // MARK: - Plugins
-        case "plugin.list", "plugin.insert", "plugin.bypass", "plugin.remove":
-            return .error("Plugin operations not yet implemented via AX")
+        case "plugin.list":
+            return listPlugins(params: params)
+        case "plugin.bypass":
+            return await setPluginBypass(params: params)
+        case "plugin.insert", "plugin.remove":
+            return .error("Plugin insert/remove are not implemented via AX")
+
+        // MARK: - Bounce
+        case "project.bounce_export":
+            return await AXBounce.run(params: params)
 
         // MARK: - Automation
         case "automation.get_mode":
@@ -162,8 +170,7 @@ actor AccessibilityChannel: Channel {
         // Find the tempo text field and set its value
         let texts = AXHelpers.findAllDescendants(of: transport, role: kAXTextFieldRole, maxDepth: 4)
         for field in texts {
-            let desc = AXHelpers.getDescription(field)?.lowercased() ?? ""
-            if desc.contains("tempo") || desc.contains("bpm") {
+            if AXLabels.tempo.isContained(in: AXHelpers.getDescription(field)) {
                 AXHelpers.setAttribute(field, kAXValueAttribute, tempoStr as CFTypeRef)
                 AXHelpers.performAction(field, kAXConfirmAction)
                 return .success("{\"tempo\":\(tempoStr)}")
@@ -302,8 +309,88 @@ actor AccessibilityChannel: Channel {
             name: AXHelpers.getDescription(strip),
             volume: fader.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
             pan: panKnob.flatMap { AXValueExtractors.extractSliderValue($0) } ?? 0.0,
-            eqEnabled: eqButton.flatMap { AXHelpers.getAttribute($0, kAXValueAttribute) } == "on"
+            eqEnabled: AXLabels.onState.matches(
+                eqButton.flatMap { AXHelpers.getAttribute($0, kAXValueAttribute) }
+            ),
+            plugins: AXLogicProElements.pluginSlots(in: strip).slots.map(Self.pluginState)
         )
+    }
+
+    private static func pluginState(_ slot: AXLogicProElements.PluginSlot) -> PluginSlotState {
+        PluginSlotState(
+            index: slot.index,
+            name: slot.name,
+            isBypassed: AXValueExtractors.extractCheckboxState(slot.bypassCheckbox) ?? false
+        )
+    }
+
+    // MARK: - Plugins
+
+    private func listPlugins(params: [String: String]) -> ChannelResult {
+        guard let indexStr = params["track_index"], let index = Int(indexStr) else {
+            return .error("Missing or invalid 'track_index' parameter")
+        }
+        guard AXLogicProElements.getMixerArea() != nil else {
+            return .error("Cannot locate mixer — open the Mixer window (X) first")
+        }
+        guard let strip = AXLogicProElements.mixerStrip(at: index) else {
+            return .error("Channel strip index \(index) out of range")
+        }
+        let found = AXLogicProElements.pluginSlots(in: strip)
+        if found.slots.isEmpty && found.hiddenCount > 0 {
+            return .error(Self.hiddenSlotsMessage(index: index, count: found.hiddenCount))
+        }
+        return encodeResult(found.slots.map(Self.pluginState))
+    }
+
+    private static func hiddenSlotsMessage(index: Int, count: Int) -> String {
+        "Strip \(index) has \(count) plugin slot(s), but the insert area is collapsed so Logic " +
+            "does not expose their names or bypass state. Enlarge the Mixer (e.g. open it as a " +
+            "window with Cmd+2) so the inserts are visible."
+    }
+
+    private func setPluginBypass(params: [String: String]) async -> ChannelResult {
+        guard let indexStr = params["track_index"], let index = Int(indexStr) else {
+            return .error("Missing or invalid 'track_index' parameter")
+        }
+        guard let slotStr = params["slot"], let slotIndex = Int(slotStr) else {
+            return .error("Missing or invalid 'slot' parameter")
+        }
+        guard let desired = params["bypassed"].flatMap(Bool.init) else {
+            return .error("Missing or invalid 'bypassed' parameter")
+        }
+        guard AXLogicProElements.getMixerArea() != nil else {
+            return .error("Cannot locate mixer — open the Mixer window (X) first")
+        }
+        guard let strip = AXLogicProElements.mixerStrip(at: index) else {
+            return .error("Channel strip index \(index) out of range")
+        }
+        let found = AXLogicProElements.pluginSlots(in: strip)
+        if found.slots.isEmpty && found.hiddenCount > 0 {
+            return .error(Self.hiddenSlotsMessage(index: index, count: found.hiddenCount))
+        }
+        let slots = found.slots
+        guard slots.indices.contains(slotIndex) else {
+            return .error("Strip \(index) has \(slots.count) loaded plugin(s); slot \(slotIndex) does not exist")
+        }
+        let slot = slots[slotIndex]
+        guard let current = AXValueExtractors.extractCheckboxState(slot.bypassCheckbox) else {
+            return .error("Cannot read bypass state of \(slot.name); not toggling blind")
+        }
+        if current != desired {
+            guard AXHelpers.performAction(slot.bypassCheckbox, kAXPressAction) else {
+                return .error("Failed to press bypass on \(slot.name)")
+            }
+        }
+        // Logic updates the checkbox's AXValue asynchronously after a press;
+        // reading it straight away returns the old state.
+        let settled = await AXHelpers.poll(seconds: 2) {
+            AXValueExtractors.extractCheckboxState(slot.bypassCheckbox) == desired ? true : nil
+        }
+        guard settled != nil else {
+            return .error("Bypass on \(slot.name) did not change to \(desired)")
+        }
+        return encodeResult(PluginSlotState(index: slot.index, name: slot.name, isBypassed: desired))
     }
 
     private func setMixerValue(params: [String: String], target: MixerTarget) -> ChannelResult {

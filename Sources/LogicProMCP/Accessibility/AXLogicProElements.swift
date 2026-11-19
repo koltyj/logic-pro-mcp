@@ -22,7 +22,7 @@ enum AXLogicProElements {
     /// Find the transport bar area (toolbar/group containing play, stop, record, etc.)
     static func getTransportBar() -> AXUIElement? {
         guard let window = mainWindow() else { return nil }
-        if let bar = AXHelpers.findChild(of: window, role: kAXGroupRole, description: "Control Bar") {
+        if let bar = AXHelpers.findChild(of: window, role: kAXGroupRole, description: AXLabels.controlBar) {
             return bar
         }
         // Legacy fallback: Logic Pro's transport is typically an AXToolbar near the top.
@@ -34,29 +34,31 @@ enum AXLogicProElements {
     }
 
     /// Find a specific transport control by its title or description.
+    /// `name` is the English control name ("Cycle", "Metronome", ...); every
+    /// known localized spelling is accepted.
     static func findTransportButton(named name: String) -> AXUIElement? {
+        findTransportButton(label: AXLabels.label(forEnglishName: name))
+    }
+
+    static func findTransportButton(label: AXLabel) -> AXUIElement? {
         guard let transport = getTransportBar() else { return nil }
         if let checkbox = AXHelpers.findDescendant(
-            of: transport, role: kAXCheckBoxRole, description: name, maxDepth: 4
+            of: transport, role: kAXCheckBoxRole, description: label, maxDepth: 4
         ) {
             return checkbox
         }
         if let checkbox = AXHelpers.findDescendant(
-            of: transport, role: kAXCheckBoxRole, title: name, maxDepth: 4
+            of: transport, role: kAXCheckBoxRole, title: label, maxDepth: 4
         ) {
             return checkbox
         }
         // Legacy fallback: AXButton.
-        if let button = AXHelpers.findDescendant(of: transport, role: kAXButtonRole, title: name) {
+        if let button = AXHelpers.findDescendant(of: transport, role: kAXButtonRole, title: label) {
             return button
         }
-        let buttons = AXHelpers.findAllDescendants(of: transport, role: kAXButtonRole, maxDepth: 4)
-        for button in buttons {
-            if AXHelpers.getDescription(button) == name {
-                return button
-            }
-        }
-        return nil
+        return AXHelpers.findDescendant(
+            of: transport, role: kAXButtonRole, description: label, maxDepth: 4
+        )
     }
 
     // MARK: - Tracks
@@ -65,7 +67,7 @@ enum AXLogicProElements {
     static func getTrackHeaders() -> AXUIElement? {
         guard let window = mainWindow() else { return nil }
         if let area = AXHelpers.findDescendant(
-            of: window, role: kAXGroupRole, description: "Tracks header"
+            of: window, role: kAXGroupRole, description: AXLabels.tracksHeader
         ) {
             return area
         }
@@ -107,12 +109,12 @@ enum AXLogicProElements {
         // single-channel strip), and a plain recursive search finds that one
         // first and reports one or two strips instead of the full desk.
         guard let pane = AXHelpers.findChild(
-            of: window, role: kAXGroupRole, description: "Mixer"
+            of: window, role: kAXGroupRole, description: AXLabels.mixer
         ) else { return nil }
 
         // The channel strips live in an AXLayoutArea inside that pane.
         if let area = AXHelpers.findDescendant(
-            of: pane, role: "AXLayoutArea", description: "Mixer", maxDepth: 3
+            of: pane, role: "AXLayoutArea", description: AXLabels.mixer, maxDepth: 3
         ) {
             return area
         }
@@ -125,9 +127,9 @@ enum AXLogicProElements {
     /// strip has no pan control at all, so an ordinal lookup silently returns
     /// some other slider.
     enum StripControl {
-        static let volume = "volume fader"
-        static let pan = "pan"
-        static let eq = "EQ"
+        static let volume = AXLabels.volumeFader
+        static let pan = AXLabels.pan
+        static let eq = AXLabels.eq
     }
 
     /// The channel strips, in mixer order.
@@ -149,7 +151,7 @@ enum AXLogicProElements {
     static func stripControl(
         _ strip: AXUIElement,
         role: String,
-        description: String
+        description: AXLabel
     ) -> AXUIElement? {
         AXHelpers.findDescendant(of: strip, role: role, description: description, maxDepth: 4)
     }
@@ -183,14 +185,58 @@ enum AXLogicProElements {
     }
 
     static func masterStripCandidateIndices(descriptions: [String?]) -> [Int] {
-        func indices(matching expectedDescription: String) -> [Int] {
-            descriptions.indices.filter {
-                descriptions[$0]?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .localizedCaseInsensitiveCompare(expectedDescription) == .orderedSame
-            }
+        func indices(matching label: AXLabel) -> [Int] {
+            descriptions.indices.filter { label.matches(descriptions[$0]) }
         }
-        return indices(matching: "Master") + indices(matching: "Stereo Out")
+        return indices(matching: AXLabels.masterStrip) + indices(matching: AXLabels.stereoOutStrip)
+    }
+
+    // MARK: - Plugin slots
+
+    /// A loaded insert plugin on a channel strip.
+    struct PluginSlot {
+        /// Position among the strip's loaded plugins, top to bottom (0-based).
+        let index: Int
+        /// Name as Logic Pro displays it. Logic truncates long names in the
+        /// strip (e.g. "RX 10 Repa"), and AX exposes only the displayed text.
+        let name: String
+        let bypassCheckbox: AXUIElement
+    }
+
+    /// Loaded insert plugins on a strip, top to bottom as shown on screen.
+    ///
+    /// A slot is a group that carries a bypass checkbox; empty slots are bare
+    /// buttons and are skipped. When the strip's insert area is collapsed (a
+    /// short mixer pane), Logic still exposes the groups but labels each one
+    /// with the generic "Audio Plug-in" text of the empty-slot button, and their
+    /// checkbox values are meaningless. Those are reported in `hiddenCount`
+    /// instead of being returned as plugins.
+    static func pluginSlots(in strip: AXUIElement) -> (slots: [PluginSlot], hiddenCount: Int) {
+        let children = AXHelpers.getChildren(strip)
+        let buttonLabels = Set(children.compactMap { child -> String? in
+            AXHelpers.getRole(child) == kAXButtonRole ? AXHelpers.getDescription(child) : nil
+        })
+        var found: [(name: String, y: Double, box: AXUIElement)] = []
+        var hidden = 0
+        for child in children where AXHelpers.getRole(child) == kAXGroupRole {
+            guard let bypass = AXHelpers.findChild(
+                of: child, role: kAXCheckBoxRole, description: AXLabels.bypass
+            ) else { continue }
+            let name = AXHelpers.getDescription(child) ?? AXHelpers.getTitle(child) ?? ""
+            if name.isEmpty || buttonLabels.contains(name) {
+                hidden += 1
+                continue
+            }
+            found.append((name, AXHelpers.getPosition(child).map { Double($0.y) } ?? Double(found.count), bypass))
+        }
+        // AX child order runs bottom-up in Logic Pro 12; screen order is what users see.
+        let ordered = found.enumerated()
+            .sorted { ($0.element.y, $0.offset) < ($1.element.y, $1.offset) }
+            .map(\.element)
+        let slots = ordered.enumerated().map {
+            PluginSlot(index: $0.offset, name: $0.element.name, bypassCheckbox: $0.element.box)
+        }
+        return (slots, hidden)
     }
 
     // MARK: - Menu Bar
@@ -246,22 +292,22 @@ enum AXLogicProElements {
     /// Find the mute control on a track header.
     static func findTrackMuteButton(trackIndex: Int) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
-        return findToggleByDescription(in: header, description: "Mute")
+        return findToggleByDescription(in: header, label: AXLabels.mute)
             ?? AXHelpers.findDescendant(of: header, role: kAXButtonRole, title: "M")
     }
 
     /// Find the solo control on a track header.
     static func findTrackSoloButton(trackIndex: Int) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
-        return findToggleByDescription(in: header, description: "Solo")
+        return findToggleByDescription(in: header, label: AXLabels.solo)
             ?? AXHelpers.findDescendant(of: header, role: kAXButtonRole, title: "S")
     }
 
     /// Find the record-arm control on a track header.
     static func findTrackArmButton(trackIndex: Int) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
-        return findToggleByDescription(in: header, description: "Record Enable")
-            ?? findToggleByDescription(in: header, description: "Record")
+        return findToggleByDescription(in: header, label: AXLabels.recordEnable)
+            ?? findToggleByDescription(in: header, label: AXLabels.record)
             ?? AXHelpers.findDescendant(of: header, role: kAXButtonRole, title: "R")
     }
 
@@ -275,17 +321,14 @@ enum AXLogicProElements {
     // MARK: - Helpers
 
     private static func findToggleByDescription(
-        in element: AXUIElement, description: String
+        in element: AXUIElement, label: AXLabel
     ) -> AXUIElement? {
         if let checkbox = AXHelpers.findDescendant(
-            of: element, role: kAXCheckBoxRole, description: description, maxDepth: 4
+            of: element, role: kAXCheckBoxRole, description: label, maxDepth: 4
         ) {
             return checkbox
         }
         let buttons = AXHelpers.findAllDescendants(of: element, role: kAXButtonRole, maxDepth: 4)
-        return buttons.first { button in
-            guard let desc = AXHelpers.getDescription(button) else { return false }
-            return desc.hasPrefix(description)
-        }
+        return buttons.first { label.isPrefix(of: AXHelpers.getDescription($0)) }
     }
 }
