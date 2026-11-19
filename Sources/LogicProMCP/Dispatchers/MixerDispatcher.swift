@@ -7,7 +7,7 @@ struct MixerDispatcher {
         description: """
             Mixer actions in Logic Pro. \
             Commands: set_volume, set_pan, set_send, set_output, set_input, \
-            set_master_volume, toggle_eq, reset_strip, bypass_plugin, insert_plugin. \
+            set_master_volume, toggle_eq, reset_strip, bypass_plugin, insert_plugin, list_plugins. \
             Params by command: \
             set_volume -> { track: Int, value: Float } (normalized 0.0-1.0); \
             set_pan -> { track: Int, value: Float } (-1.0 left to +1.0 right); \
@@ -18,7 +18,8 @@ struct MixerDispatcher {
             toggle_eq -> { track: Int }; \
             reset_strip -> { track: Int }; \
             insert_plugin -> { track: Int, slot: Int, name: String }; \
-            bypass_plugin -> { track: Int, slot: Int, bypassed: Bool }
+            bypass_plugin -> { track: Int, slot: Int, bypassed: Bool }; \
+            list_plugins -> { track: Int } — loaded inserts with display name and bypass state
             """,
         inputSchema: .object([
             "type": .string("object"),
@@ -153,9 +154,19 @@ struct MixerDispatcher {
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
+        case "list_plugins":
+            guard let track = params["track"]?.intValue ?? params["track_index"]?.intValue else {
+                return CallTool.Result(content: [.text("list_plugins requires 'track'")], isError: true)
+            }
+            let result = await router.route(
+                operation: "plugin.list",
+                params: ["track_index": String(track)]
+            )
+            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
+
         default:
             return CallTool.Result(
-                content: [.text("Unknown mixer command: \(command). Available: set_volume, set_pan, set_send, set_output, set_input, set_master_volume, toggle_eq, reset_strip, insert_plugin, bypass_plugin")],
+                content: [.text("Unknown mixer command: \(command). Available: set_volume, set_pan, set_send, set_output, set_input, set_master_volume, toggle_eq, reset_strip, insert_plugin, bypass_plugin, list_plugins")],
                 isError: true
             )
         }

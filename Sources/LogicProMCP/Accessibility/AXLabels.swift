@@ -59,6 +59,8 @@ enum AXLabels {
     static let eq = make("eq", ["EQ", "等化器"])
     static let masterStrip = make("masterStrip", ["Master"])
     static let stereoOutStrip = make("stereoOutStrip", ["Stereo Out"])
+    /// Checkbox inside each loaded plugin slot.
+    static let bypass = make("bypass", ["Bypass", "略過"])
     /// AXValue of a channel-strip button that is switched on (e.g. EQ).
     static let onState = make("onState", ["on", "開啟"])
 
@@ -79,7 +81,7 @@ enum AXLabels {
     static func label(forEnglishName name: String) -> AXLabel {
         let known: [AXLabel] = [
             controlBar, tracksHeader, mixer, volumeFader, pan, eq, masterStrip,
-            stereoOutStrip, onState, mute, solo, recordEnable, record,
+            stereoOutStrip, bypass, onState, mute, solo, recordEnable, record,
             hasFocus, cycle, metronome, tempo,
         ]
         return known.first { $0.variants.first?.caseInsensitiveCompare(name) == .orderedSame }

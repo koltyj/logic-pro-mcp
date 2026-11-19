@@ -191,6 +191,54 @@ enum AXLogicProElements {
         return indices(matching: AXLabels.masterStrip) + indices(matching: AXLabels.stereoOutStrip)
     }
 
+    // MARK: - Plugin slots
+
+    /// A loaded insert plugin on a channel strip.
+    struct PluginSlot {
+        /// Position among the strip's loaded plugins, top to bottom (0-based).
+        let index: Int
+        /// Name as Logic Pro displays it. Logic truncates long names in the
+        /// strip (e.g. "RX 10 Repa"), and AX exposes only the displayed text.
+        let name: String
+        let bypassCheckbox: AXUIElement
+    }
+
+    /// Loaded insert plugins on a strip, top to bottom as shown on screen.
+    ///
+    /// A slot is a group that carries a bypass checkbox; empty slots are bare
+    /// buttons and are skipped. When the strip's insert area is collapsed (a
+    /// short mixer pane), Logic still exposes the groups but labels each one
+    /// with the generic "Audio Plug-in" text of the empty-slot button, and their
+    /// checkbox values are meaningless. Those are reported in `hiddenCount`
+    /// instead of being returned as plugins.
+    static func pluginSlots(in strip: AXUIElement) -> (slots: [PluginSlot], hiddenCount: Int) {
+        let children = AXHelpers.getChildren(strip)
+        let buttonLabels = Set(children.compactMap { child -> String? in
+            AXHelpers.getRole(child) == kAXButtonRole ? AXHelpers.getDescription(child) : nil
+        })
+        var found: [(name: String, y: Double, box: AXUIElement)] = []
+        var hidden = 0
+        for child in children where AXHelpers.getRole(child) == kAXGroupRole {
+            guard let bypass = AXHelpers.findChild(
+                of: child, role: kAXCheckBoxRole, description: AXLabels.bypass
+            ) else { continue }
+            let name = AXHelpers.getDescription(child) ?? AXHelpers.getTitle(child) ?? ""
+            if name.isEmpty || buttonLabels.contains(name) {
+                hidden += 1
+                continue
+            }
+            found.append((name, AXHelpers.getPosition(child).map { Double($0.y) } ?? Double(found.count), bypass))
+        }
+        // AX child order runs bottom-up in Logic Pro 12; screen order is what users see.
+        let ordered = found.enumerated()
+            .sorted { ($0.element.y, $0.offset) < ($1.element.y, $1.offset) }
+            .map(\.element)
+        let slots = ordered.enumerated().map {
+            PluginSlot(index: $0.offset, name: $0.element.name, bypassCheckbox: $0.element.box)
+        }
+        return (slots, hidden)
+    }
+
     // MARK: - Menu Bar
 
     /// Get the menu bar for Logic Pro.

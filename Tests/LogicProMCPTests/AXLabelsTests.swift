@@ -28,6 +28,7 @@ final class AXLabelsTests: XCTestCase {
         XCTAssertTrue(AXLabels.mixer.matches("混音器"))
         XCTAssertTrue(AXLabels.volumeFader.matches("音量推子"))
         XCTAssertTrue(AXLabels.pan.matches("聲像"))
+        XCTAssertTrue(AXLabels.bypass.matches("略過"))
         XCTAssertTrue(AXLabels.hasFocus.matches("包含焦點"))
         XCTAssertTrue(AXLabels.metronome.matches("節拍器卡嗒聲"))
         XCTAssertTrue(AXLabels.onState.matches("開啟"))

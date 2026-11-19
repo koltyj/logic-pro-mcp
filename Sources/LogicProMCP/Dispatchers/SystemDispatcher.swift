@@ -143,7 +143,8 @@ struct SystemDispatcher {
                   toggle_eq         -> { track: Int }
                   reset_strip       -> { track: Int }
                   insert_plugin     -> { track: Int, slot: Int, name: String }
-                  bypass_plugin     -> { track: Int, slot: Int, bypassed: Bool }
+                  bypass_plugin     -> { track: Int, slot: Int, bypassed: Bool } — slot counts loaded plugins only
+                  list_plugins      -> { track: Int } — Loaded inserts: index, display name, bypass state
 
                 Read state via resource: logic://mixer
                 """
