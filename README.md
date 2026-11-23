@@ -34,13 +34,13 @@ Each command routes through the fastest available channel, with automatic fallba
 | Tool | Commands | Examples |
 |------|----------|----------|
 | `logic_transport` | play, stop, record, set_tempo, goto_position... | `logic_transport("set_tempo", {tempo: 140})` |
-| `logic_tracks` | select, create_audio, mute, solo, arm, rename... | `logic_tracks("mute", {index: 2, enabled: true})` |
+| `logic_tracks` | select, create_audio, mute, solo, arm, input_monitoring, rename... | `logic_tracks("mute", {index: 2, enabled: true})` |
 | `logic_mixer` | set_volume, set_pan, insert_plugin, bypass_plugin... | `logic_mixer("set_volume", {track: 0, value: 0.8})` |
 | `logic_midi` | send_note, send_cc, send_chord, mmc_play... | `logic_midi("send_note", {note: 60, velocity: 100, channel: 1, duration_ms: 500})` |
-| `logic_edit` | undo, redo, cut, copy, paste, quantize, split... | `logic_edit("quantize", {value: "1/16"})` |
-| `logic_navigate` | goto_bar, create_marker, toggle_view, set_zoom... | `logic_navigate("toggle_view", {view: "mixer"})` |
+| `logic_edit` | undo, redo, cut, copy, paste, clear_regions, quantize, split... | `logic_edit("quantize", {value: "1/16"})` |
+| `logic_navigate` | goto_bar, get_markers, goto_marker, create_marker, toggle_view... | `logic_navigate("toggle_view", {view: "mixer"})` |
 | `logic_project` | new, open, save, bounce, launch, quit | `logic_project("open", {path: "/path/to/song.logicx"})` |
-| `logic_system` | health, permissions, refresh_cache, help | `logic_system("help", {category: "transport"})` |
+| `logic_system` | health, permissions, refresh_cache, help, dialog_state, dialog_respond | `logic_system("help", {category: "transport"})` |
 
 ### Resources (7 URIs — zero context cost)
 
@@ -166,6 +166,8 @@ Logic Pro does not expose a programmatic API. This server works within macOS pla
 - AX element labels may be localized on non-English macOS
 - Plugin parameter control is limited to what's visible in the UI
 - OSC channel requires manual Logic Pro Control Surface setup
+- While a Logic dialog is open, state-changing commands are blocked; use `dialog_state` and `dialog_respond` to clear it
+- `set_cycle_range` is not supported yet: locators aren't settable via Accessibility, and it would need the Set Left/Right Locator by Playhead key commands assigned
 
 This is the ceiling for Logic Pro automation given Apple's constraints.
 
