@@ -120,7 +120,7 @@ struct SystemDispatcher {
                   toggle_count_in   -> {} — Toggle count-in
                   set_tempo         -> { tempo: Float } — Set BPM (20-999)
                   goto_position     -> { bar: Int } or { time: "HH:MM:SS:FF" }
-                  set_cycle_range   -> { start: Int, end: Int } — Bar numbers
+                  set_cycle_range   -> { start: Int, end: Int } — Not supported yet (needs the Set Left/Right Locator by Playhead key commands)
 
                 Read state via resource: logic://transport/state
                 """

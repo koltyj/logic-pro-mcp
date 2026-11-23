@@ -12,7 +12,7 @@ struct TransportDispatcher {
             Params by command: \
             set_tempo -> { tempo: Float } (20.0-999.0); \
             goto_position -> { bar: Int } or { time: "HH:MM:SS:FF" }; \
-            set_cycle_range -> { start: Int, end: Int } (bar numbers); \
+            set_cycle_range -> { start: Int, end: Int } (bar numbers; not supported yet, needs the Set Left/Right Locator by Playhead key commands); \
             Others -> {} (no params)
             """,
         inputSchema: .object([

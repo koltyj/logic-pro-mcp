@@ -303,12 +303,9 @@ actor AccessibilityChannel: Channel {
         return .success("{\"bar\":\(bar)}")
     }
 
+    /// Logic's locators aren't settable over AX, and no menu item sets them from the playhead.
     private func setCycleRange(params: [String: String]) -> ChannelResult {
-        // Cycle range setting via AX is fragile — requires locating the cycle locators
-        guard let _ = params["start"], let _ = params["end"] else {
-            return .error("Missing 'start' and/or 'end' parameters")
-        }
-        return .error("Cycle range setting not yet fully implemented via AX")
+        .error("set_cycle_range is not supported yet: it requires the Set Left Locator by Playhead and Set Right Locator by Playhead key commands, which Logic leaves unassigned. Use toggle_cycle with locators set in Logic.")
     }
 
     // MARK: - Tracks
