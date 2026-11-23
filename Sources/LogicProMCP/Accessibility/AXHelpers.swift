@@ -5,8 +5,12 @@ import Foundation
 /// All functions are synchronous; they block briefly while the AX subsystem responds.
 enum AXHelpers {
     /// Create an AXUIElement reference for a running application by PID.
+    /// Calls time out after 1s instead of the multi-second default: while Logic shows a
+    /// modal dialog every AX call blocks, and polling loops would otherwise stall for minutes.
     static func axApp(pid: pid_t) -> AXUIElement {
-        AXUIElementCreateApplication(pid)
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0)
+        return app
     }
 
     /// Get a typed attribute value from an AX element.
@@ -154,6 +158,15 @@ enum AXHelpers {
         let result = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value)
         guard result == .success else { return nil }
         return value
+    }
+
+    /// Calls `read` until it returns a value, sleeping `interval` between attempts (checks first).
+    static func poll<T>(attempts: Int = 20, interval: useconds_t = 50_000, _ read: () -> T?) -> T? {
+        for attempt in 0..<attempts {
+            if let value = read() { return value }
+            if attempt < attempts - 1 { usleep(interval) }
+        }
+        return nil
     }
 
     /// Get the description of an element (kAXDescriptionAttribute).

@@ -26,7 +26,8 @@ actor AccessibilityChannel: Channel {
     }
 
     func execute(operation: String, params: [String: String]) async -> ChannelResult {
-        guard ProcessUtils.isLogicProRunning else {
+        // Opening a project is how Logic gets launched, so it alone runs without Logic.
+        guard ProcessUtils.isLogicProRunning || operation == "project.open" else {
             return .error("Logic Pro is not running")
         }
 
@@ -36,12 +37,23 @@ actor AccessibilityChannel: Channel {
             return getTransportState()
 
         // MARK: - Transport mutations
+        // Logic 12 has no Stop button: Play toggles, so stop = Play off.
+        case "transport.play":
+            return setTransportButton("Play", to: true)
+        case "transport.stop":
+            return await stopTransport()
+        case "transport.record":
+            return setTransportButton("Record", to: true, timeout: 60)
         case "transport.toggle_cycle":
             return toggleTransportButton(named: "Cycle")
         case "transport.toggle_metronome":
-            return toggleTransportButton(named: "Metronome")
+            return toggleTransportButton(named: "Metronome Click")
+        case "transport.toggle_count_in":
+            return toggleTransportButton(named: "Count In")
         case "transport.set_tempo":
             return setTempo(params: params)
+        case "transport.goto_position":
+            return gotoBar(params: params)
         case "transport.set_cycle_range":
             return setCycleRange(params: params)
 
@@ -53,15 +65,49 @@ actor AccessibilityChannel: Channel {
 
         // MARK: - Track mutations
         case "track.select":
-            return selectTrack(params: params)
+            return await selectTrack(params: params)
         case "track.set_mute":
-            return setTrackToggle(params: params, button: "Mute")
+            return await setTrackToggle(params: params, button: "Mute")
         case "track.set_solo":
-            return setTrackToggle(params: params, button: "Solo")
+            return await setTrackToggle(params: params, button: "Solo")
         case "track.set_arm":
-            return setTrackToggle(params: params, button: "Record")
+            return await setTrackToggle(params: params, button: "Record")
         case "track.rename":
-            return renameTrack(params: params)
+            return await renameTrack(params: params)
+        case "track.delete":
+            return deleteSelectedTrack()
+        case "track.duplicate":
+            return createTrack(menuPath: ["Track", "Other", "New Track With Duplicate Settings"])
+        case "view.toggle_mixer":
+            return toggleTransportButton(named: "Mixer")
+        case "view.toggle_piano_roll":
+            return toggleTransportButton(named: "Editors")
+        case "view.toggle_library":
+            return toggleTransportButton(named: "Library")
+        case "view.toggle_inspector":
+            return toggleTransportButton(named: "Inspector")
+        case "project.bounce":
+            return openBounceDialog()
+        case "track.set_input_monitoring":
+            return await setTrackToggle(params: params, button: "Input Monitoring")
+        case "track.create_audio":
+            return createTrack(menuPath: ["Track", "New Audio Track"])
+        case "track.create_instrument":
+            return createTrack(menuPath: ["Track", "New Software Instrument Track"])
+        case "track.create_external_midi":
+            return createTrack(menuPath: ["Track", "New External MIDI Track"])
+        case "edit.undo":
+            return pressEditMenuItem(prefix: "Undo")
+        case "edit.redo":
+            return pressEditMenuItem(prefix: "Redo")
+        case "region.clear_all":
+            return clearAllRegions()
+        case "nav.create_marker":
+            return createMarker()
+        case "edit.select_all":
+            return pressMenuItem(["Edit", "Select All"])
+        case "edit.delete":
+            return pressMenuItem(["Edit", "Delete"], expectUndo: true)
         case "track.set_color":
             return .error("Track color setting not supported via AX")
 
@@ -89,11 +135,21 @@ actor AccessibilityChannel: Channel {
 
         // MARK: - Navigation
         case "nav.get_markers":
-            return .error("Marker reading not yet implemented via AX")
+            return readMarkers().map { encodeResult($0) } ?? .error("Cannot read Logic's Marker List")
         case "nav.rename_marker":
-            return .error("Marker renaming not yet implemented via AX")
+            return await renameMarker(params: params)
 
         // MARK: - Project
+        case "dialog.state":
+            return .success(AXLogicProElements.openDialogSummary() ?? "{\"open\":false}")
+        case "dialog.respond":
+            return respondToDialog(params: params)
+        case "project.save":
+            return saveProject()
+        case "project.open":
+            return openProject(params: params)
+        case "project.close":
+            return closeProject()
         case "project.get_info":
             return getProjectInfo()
 
@@ -143,41 +199,113 @@ actor AccessibilityChannel: Channel {
     }
 
     private func toggleTransportButton(named name: String) -> ChannelResult {
+        guard let button = AXLogicProElements.findTransportButton(named: name),
+              let current = AXValueExtractors.extractCheckboxState(button) else {
+            return .error("Cannot find transport button: \(name)")
+        }
+        return setTransportButton(name, to: !current)
+    }
+
+    /// Presses a control bar toggle only if it isn't already in `desired`, then confirms it.
+    /// Control bar buttons honor AXPress (unlike track header controls).
+    private func setTransportButton(_ name: String, to desired: Bool, timeout attempts: Int = 20) -> ChannelResult {
         guard let button = AXLogicProElements.findTransportButton(named: name) else {
             return .error("Cannot find transport button: \(name)")
         }
+        if AXValueExtractors.extractCheckboxState(button) == desired {
+            return .success("{\"\(name)\":\(desired),\"already\":true}")
+        }
         guard AXHelpers.performAction(button, kAXPressAction) else {
+            // A press that opens a modal dialog reports failure even though Logic acted.
+            if let dialog = AXHelpers.poll(attempts: 5, interval: 100_000, AXLogicProElements.openDialogSummary) {
+                return .failedAfterActing("Pressed \(name); Logic answered with a dialog: \(dialog)")
+            }
             return .error("Failed to press transport button: \(name)")
         }
-        return .success("{\"toggled\":\"\(name)\"}")
+        // Record can stay off until a count-in finishes, hence the longer allowance.
+        let outcome = AXHelpers.poll(attempts: attempts) { () -> String? in
+            if AXValueExtractors.extractCheckboxState(button) == desired { return "" }
+            return AXLogicProElements.openDialogSummary()
+        }
+        if let dialog = outcome, !dialog.isEmpty {
+            return .failedAfterActing("Pressed \(name); Logic answered with a dialog: \(dialog)")
+        }
+        guard outcome != nil else {
+            return .failedAfterActing("Pressed \(name) but Logic still shows it \(desired ? "off" : "on")")
+        }
+        return .success("{\"\(name)\":\(desired)}")
     }
 
     private func setTempo(params: [String: String]) -> ChannelResult {
-        guard let tempoStr = params["tempo"], let _ = Double(tempoStr) else {
+        guard let tempo = (params["bpm"] ?? params["tempo"]).flatMap(Double.init) else {
             return .error("Missing or invalid 'tempo' parameter")
         }
-        guard let transport = AXLogicProElements.getTransportBar() else {
-            return .error("Cannot locate transport bar")
+        guard let transport = AXLogicProElements.getTransportBar(),
+              let slider = AXHelpers.findDescendant(of: transport, role: kAXSliderRole, description: "Tempo", maxDepth: 4) else {
+            return .error("Cannot find the control bar Tempo slider")
         }
-        // Find the tempo text field and set its value
-        let texts = AXHelpers.findAllDescendants(of: transport, role: kAXTextFieldRole, maxDepth: 4)
-        for field in texts {
-            let desc = AXHelpers.getDescription(field)?.lowercased() ?? ""
-            if desc.contains("tempo") || desc.contains("bpm") {
-                AXHelpers.setAttribute(field, kAXValueAttribute, tempoStr as CFTypeRef)
-                AXHelpers.performAction(field, kAXConfirmAction)
-                return .success("{\"tempo\":\(tempoStr)}")
-            }
+        guard Self.step(slider, to: tempo.rounded()) else {
+            return .failedAfterActing("Set tempo \(tempo) but Logic shows \(AXValueExtractors.extractSliderValue(slider) ?? -1)")
         }
-        return .error("Cannot locate tempo field")
+        return .success("{\"tempo\":\(tempo.rounded())}")
     }
 
-    private func setCycleRange(params: [String: String]) -> ChannelResult {
-        // Cycle range setting via AX is fragile — requires locating the cycle locators
-        guard let _ = params["start"], let _ = params["end"] else {
-            return .error("Missing 'start' and/or 'end' parameters")
+    /// Logic moves its control bar sliders one unit per AX value set, toward the requested value,
+    /// so keep setting until the readback matches. Fails as soon as a set makes no progress.
+    private static func step(_ slider: AXUIElement, to target: Double, maxSteps: Int = 2_000) -> Bool {
+        var previous = AXValueExtractors.extractSliderValue(slider)
+        for _ in 0..<maxSteps {
+            guard let current = previous else { return false }
+            if abs(current - target) < 0.5 { return true }
+            AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: target))
+            let next = AXHelpers.poll(attempts: 10, interval: 10_000) { () -> Double? in
+                guard let value = AXValueExtractors.extractSliderValue(slider), value != current else { return nil }
+                return value
+            }
+            guard let next else { return false }
+            previous = next
         }
-        return .error("Cycle range setting not yet fully implemented via AX")
+        return false
+    }
+
+    /// Logic 12 has no Stop button and pressing Play doesn't stop playback, so send Space and confirm.
+    private func stopTransport() async -> ChannelResult {
+        guard let play = AXLogicProElements.findTransportButton(named: "Play") else {
+            return .error("Cannot find transport button: Play")
+        }
+        if AXValueExtractors.extractCheckboxState(play) == false {
+            return .success("{\"Play\":false,\"already\":true}")
+        }
+        guard await bringLogicForward() else {
+            return .error("Could not bring Logic Pro to the front to stop")
+        }
+        AXPointer.pressKey(49)  // Space
+        let stopped = AXHelpers.poll { AXValueExtractors.extractCheckboxState(play) == false ? true : nil }
+        guard stopped != nil else { return .failedAfterActing("Sent Space but Logic is still playing") }
+        return .success("{\"Play\":false}")
+    }
+
+    /// Moves the playhead by setting the control bar's bar slider ("Playhead Position" › "bar").
+    private func gotoBar(params: [String: String]) -> ChannelResult {
+        guard let bar = (params["bar"] ?? params["position"]?.split(separator: ".").first.map(String.init)).flatMap(Int.init) else {
+            return .error("goto_position via AX needs a bar number")
+        }
+        guard let transport = AXLogicProElements.getTransportBar(),
+              let playhead = AXHelpers.findDescendant(of: transport, role: kAXGroupRole, description: "Playhead Position", maxDepth: 4),
+              let slider = AXHelpers.findDescendant(of: playhead, role: kAXSliderRole, description: "bar", maxDepth: 2) else {
+            return .error("Cannot find the playhead bar slider")
+        }
+        // Bar start: bring the beat back to 1 as well (the bar slider keeps the current beat).
+        let beat = AXHelpers.findDescendant(of: playhead, role: kAXSliderRole, description: "beat", maxDepth: 2)
+        guard Self.step(slider, to: Double(bar)), beat.map({ Self.step($0, to: 1) }) ?? true else {
+            return .failedAfterActing("Set playhead to bar \(bar) but Logic shows bar \(Int(AXValueExtractors.extractSliderValue(slider) ?? -1))")
+        }
+        return .success("{\"bar\":\(bar)}")
+    }
+
+    /// Logic's locators aren't settable over AX, and no menu item sets them from the playhead.
+    private func setCycleRange(params: [String: String]) -> ChannelResult {
+        .error("set_cycle_range is not supported yet: it requires the Set Left Locator by Playhead and Set Right Locator by Playhead key commands, which Logic leaves unassigned. Use toggle_cycle with locators set in Logic.")
     }
 
     // MARK: - Tracks
@@ -206,20 +334,37 @@ actor AccessibilityChannel: Channel {
         return .error("No track is currently selected")
     }
 
-    private func selectTrack(params: [String: String]) -> ChannelResult {
+    // Logic 12 track header controls report AXPress as handled but never act on it,
+    // so track selection, toggles and rename use a real click (see AXPointer).
+
+    private func selectTrack(params: [String: String]) async -> ChannelResult {
         guard let indexStr = params["index"], let index = Int(indexStr) else {
             return .error("Missing or invalid 'index' parameter")
         }
-        guard let header = AXLogicProElements.findTrackHeader(at: index) else {
+        guard let header = AXLogicProElements.findTrackHeader(at: index),
+              let field = AXLogicProElements.findTrackNameField(trackIndex: index) else {
             return .error("Track at index \(index) not found")
         }
-        guard AXHelpers.performAction(header, kAXPressAction) else {
-            return .error("Failed to select track \(index)")
+        if AXValueExtractors.isTrackSelected(header) {
+            return .success("{\"selected\":\(index),\"already\":true}")
+        }
+        guard await bringLogicForward() else {
+            return .error("Could not bring Logic Pro to the front; nothing was clicked")
+        }
+        // A single click on the name selects the track; a double-click would rename it.
+        guard AXPointer.click(field) else {
+            return .error("Track \(index) is covered by another window or off screen; nothing was clicked")
+        }
+        let selected = AXHelpers.poll {
+            AXLogicProElements.findTrackHeader(at: index).flatMap { AXValueExtractors.isTrackSelected($0) ? true : nil }
+        }
+        guard selected != nil else {
+            return .failedAfterActing("Clicked track \(index) but Logic does not show it selected")
         }
         return .success("{\"selected\":\(index)}")
     }
 
-    private func setTrackToggle(params: [String: String], button buttonName: String) -> ChannelResult {
+    private func setTrackToggle(params: [String: String], button buttonName: String) async -> ChannelResult {
         guard let indexStr = params["index"], let index = Int(indexStr) else {
             return .error("Missing or invalid 'index' parameter")
         }
@@ -227,30 +372,452 @@ actor AccessibilityChannel: Channel {
         case "Mute": AXLogicProElements.findTrackMuteButton
         case "Solo": AXLogicProElements.findTrackSoloButton
         case "Record": AXLogicProElements.findTrackArmButton
+        case "Input Monitoring": AXLogicProElements.findTrackInputMonitorButton
         default: { _ in nil }
         }
+        let desired = params["enabled"].map { $0 == "true" } ?? true
         guard let button = finder(index) else {
-            return .error("Cannot find \(buttonName) button on track \(index)")
+            return .error("Cannot find \(buttonName) button on track \(index); the track may not exist, be scrolled out of view, or the header may not show that button")
         }
-        guard AXHelpers.performAction(button, kAXPressAction) else {
-            return .error("Failed to click \(buttonName) on track \(index)")
+        if AXValueExtractors.extractCheckboxState(button) == desired {
+            return .success("{\"track\":\(index),\"\(buttonName)\":\(desired),\"already\":true}")
         }
-        return .success("{\"track\":\(index),\"toggled\":\"\(buttonName)\"}")
+        guard await bringLogicForward() else {
+            return .error("Could not bring Logic Pro to the front; nothing was clicked")
+        }
+        // Re-read the element we hold; only search again if Logic replaced it.
+        let isDesired = { () -> Bool? in
+            let state = AXValueExtractors.extractCheckboxState(button)
+                ?? finder(index).flatMap(AXValueExtractors.extractCheckboxState)
+            return state == desired ? true : nil
+        }
+        var confirmed: Bool?
+        // A click landing while a menu is still closing is occasionally dropped: retry once, but only
+        // after re-checking, so a click that registers late isn't toggled back.
+        for attempt in 0..<2 where confirmed == nil {
+            if attempt == 1 {
+                usleep(300_000)
+                if isDesired() != nil { confirmed = true; break }
+            }
+            guard AXPointer.click(button) else {
+                return .error("\(buttonName) on track \(index) is covered by another window or off screen; nothing was clicked")
+            }
+            confirmed = AXHelpers.poll(isDesired)
+        }
+        guard confirmed != nil else {
+            return .failedAfterActing("Clicked \(buttonName) on track \(index) but Logic still shows it \(desired ? "off" : "on")")
+        }
+        return .success("{\"track\":\(index),\"\(buttonName)\":\(desired)}")
     }
 
-    private func renameTrack(params: [String: String]) -> ChannelResult {
+    private func renameTrack(params: [String: String]) async -> ChannelResult {
         guard let indexStr = params["index"], let index = Int(indexStr),
               let name = params["name"] else {
             return .error("Missing 'index' or 'name' parameter")
         }
-        guard let field = AXLogicProElements.findTrackNameField(trackIndex: index) else {
+        guard let header = AXLogicProElements.findTrackHeader(at: index),
+              let field = AXLogicProElements.findTrackNameField(trackIndex: index) else {
             return .error("Cannot find name field for track \(index)")
         }
-        // Double-click to enter edit mode, then set value
-        AXHelpers.performAction(field, kAXPressAction)
-        AXHelpers.setAttribute(field, kAXValueAttribute, name as CFTypeRef)
-        AXHelpers.performAction(field, kAXConfirmAction)
+        if AXValueExtractors.extractTrackState(from: header, index: index).name == name {
+            return .success("{\"track\":\(index),\"name\":\"\(name)\",\"already\":true}")
+        }
+        guard await bringLogicForward() else {
+            return .error("Could not bring Logic Pro to the front; nothing was clicked")
+        }
+        // The header name field isn't settable; double-clicking opens an editable field editor.
+        // A double-click right after scrolling is sometimes lost, so try twice.
+        var editor: AXUIElement?
+        for _ in 0..<2 where editor == nil {
+            guard let target = AXLogicProElements.findTrackNameField(trackIndex: index) ?? Optional(field),
+                  AXPointer.click(target, count: 2) else {
+                return .error("Name of track \(index) is covered by another window or off screen; nothing was clicked")
+            }
+            // Never set anything unless an editable text field actually has focus.
+            editor = AXHelpers.poll(focusedEditableTextField)
+        }
+        guard let editor else {
+            return .error("Rename editor did not open on track \(index); nothing was changed")
+        }
+        guard AXHelpers.setAttribute(editor, kAXValueAttribute, name as CFTypeRef) else {
+            return .failedAfterActing("Rename editor on track \(index) rejected the new name")
+        }
+        AXHelpers.performAction(editor, kAXConfirmAction)
+        let confirmed = AXHelpers.poll { () -> Bool? in
+            guard let header = AXLogicProElements.findTrackHeader(at: index) else { return nil }
+            return AXValueExtractors.extractTrackState(from: header, index: index).name == name ? true : nil
+        }
+        guard confirmed != nil else {
+            return .failedAfterActing("Set track \(index) name to '\(name)' but Logic does not show it")
+        }
         return .success("{\"track\":\(index),\"name\":\"\(name)\"}")
+    }
+
+    /// Presses File › Save and confirms the project's ProjectData file was rewritten.
+    private func saveProject() -> ChannelResult {
+        guard let project = AXLogicProElements.openProjectURL() else {
+            return .error("Cannot determine the open project's file")
+        }
+        let before = Self.lastProjectWrite(project)
+        guard let item = AXLogicProElements.menuItem(path: ["File", "Save"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press File › Save")
+        }
+        let saved = AXHelpers.poll(attempts: 50, interval: 100_000) { () -> Bool? in
+            guard let after = Self.lastProjectWrite(project), after != before else { return nil }
+            return true
+        }
+        guard saved != nil else {
+            return .failedAfterActing("Pressed File › Save but \(project.lastPathComponent) was not written; a dialog may be open")
+        }
+        return .success("{\"saved\":\"\(project.path)\"}")
+    }
+
+    private func respondToDialog(params: [String: String]) -> ChannelResult {
+        guard let title = params["button"] else { return .error("Missing 'button' parameter") }
+        guard let dialog = AXLogicProElements.openDialog() else { return .error("No Logic dialog is open") }
+        let buttons = AXHelpers.findAllDescendants(of: dialog, role: kAXButtonRole, maxDepth: 4)
+        guard let button = buttons.first(where: { AXHelpers.getTitle($0) == title }) else {
+            let titles = buttons.compactMap { AXHelpers.getTitle($0) }.filter { !$0.isEmpty }
+            return .error("No button '\(title)'. Buttons: \(titles.joined(separator: ", "))")
+        }
+        guard AXHelpers.performAction(button, kAXPressAction) else { return .error("Failed to press '\(title)'") }
+        let next = AXHelpers.poll(attempts: 10, interval: 100_000) { () -> String? in
+            guard let open = AXLogicProElements.openDialog() else { return "" }
+            return CFEqual(open, dialog) ? nil : (AXLogicProElements.openDialogSummary() ?? "")
+        }
+        switch next {
+        case .none: return .failedAfterActing("Pressed '\(title)' but the dialog is still open")
+        case .some(""): return .success("{\"pressed\":\"\(title)\"}")
+        case .some(let following): return .success("Pressed '\(title)'. Logic now asks: \(following)")
+        }
+    }
+
+    private func openProject(params: [String: String]) -> ChannelResult {
+        guard let path = params["path"] else { return .error("Missing 'path' parameter") }
+        let target = URL(fileURLWithPath: path).standardizedFileURL.path
+        if AXLogicProElements.openProjectPaths().contains(target) {
+            return .success("{\"opened\":\"\(target)\",\"already\":true}")
+        }
+        let launching = !ProcessUtils.isLogicProRunning
+        // `open` returns immediately; AppleScript's open blocks while Logic shows a dialog.
+        let launcher = Process()
+        launcher.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        launcher.arguments = ["-a", "Logic Pro", target]
+        do {
+            try launcher.run()
+            launcher.waitUntilExit()
+        } catch {
+            return .error("Failed to open \(target): \(error.localizedDescription)")
+        }
+        // Stop waiting as soon as Logic asks something (missing files, MIDI ports, ...).
+        // Cold-launching Logic takes longer than opening a project in a running Logic.
+        let outcome = AXHelpers.poll(attempts: launching ? 450 : 150, interval: 100_000) { () -> String? in
+            if AXLogicProElements.openProjectPaths().contains(target) { return "" }
+            return AXLogicProElements.openDialogSummary()
+        }
+        guard let outcome else {
+            return .failedAfterActing("\(target) did not open within \(launching ? 45 : 15)s")
+        }
+        guard outcome.isEmpty else {
+            return .failedAfterActing("Opening \(target) is waiting on a Logic dialog: \(outcome)")
+        }
+        // Logic often raises warnings (missing MIDI ports, files) just after the window appears.
+        if let warning = AXHelpers.poll(attempts: 30, interval: 100_000, AXLogicProElements.openDialogSummary) {
+            return .success("Opened \(target). Logic is asking: \(warning)")
+        }
+        return .success("{\"opened\":\"\(target)\"}")
+    }
+
+    private func closeProject() -> ChannelResult {
+        guard let project = AXLogicProElements.openProjectURL()?.path else {
+            return .error("No project is open")
+        }
+        guard let item = AXLogicProElements.menuItem(path: ["File", "Close Project"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press File › Close Project")
+        }
+        let outcome = AXHelpers.poll(attempts: 30, interval: 100_000) { () -> String? in
+            if !AXLogicProElements.openProjectPaths().contains(project) { return "" }
+            return AXLogicProElements.openDialogSummary()
+        }
+        guard let outcome else {
+            return .failedAfterActing("\(project) is still open after 3s")
+        }
+        guard outcome.isEmpty else {
+            return .failedAfterActing("Closing \(project) is waiting on a Logic dialog: \(outcome)")
+        }
+        return .success("{\"closed\":\"\(project)\"}")
+    }
+
+    /// Newest modification date among the project's ProjectData files.
+    private static func lastProjectWrite(_ project: URL) -> Date? {
+        let alternatives = project.appendingPathComponent("Alternatives")
+        let folders = (try? FileManager.default.contentsOfDirectory(at: alternatives, includingPropertiesForKeys: nil)) ?? []
+        return folders.compactMap {
+            try? $0.appendingPathComponent("ProjectData").resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        }.max()
+    }
+
+    /// Presses a track-creating menu item and confirms exactly one track was added.
+    private func createTrack(menuPath path: [String]) -> ChannelResult {
+        let title = path.joined(separator: " › ")
+        let before = AXLogicProElements.allTrackHeaders().count
+        guard let item = AXLogicProElements.menuItem(path: path),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press \(title)")
+        }
+        let added = AXHelpers.poll { AXLogicProElements.allTrackHeaders().count == before + 1 ? true : nil }
+        guard added != nil else {
+            return .failedAfterActing("Pressed \(title) but the track count is still \(before)")
+        }
+        return .success("{\"created\":\"\(path.last ?? title)\",\"track_count\":\(before + 1)}")
+    }
+
+    /// Opens File › Bounce › Project or Section… and returns Logic's dialog so the caller can answer it.
+    private func openBounceDialog() -> ChannelResult {
+        guard let item = AXLogicProElements.menuItem(path: ["File", "Bounce", "Project or Section…"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press File › Bounce › Project or Section…")
+        }
+        guard let dialog = AXHelpers.poll(attempts: 30, interval: 100_000, AXLogicProElements.openDialogSummary) else {
+            return .failedAfterActing("Pressed Bounce but no bounce dialog appeared")
+        }
+        return .success("Bounce dialog open: \(dialog). Answer with logic_system dialog_respond {button}.")
+    }
+
+    /// Presses a menu item. With `expectUndo`, confirms Logic recorded an undoable edit.
+    private func pressMenuItem(_ path: [String], expectUndo: Bool = false) -> ChannelResult {
+        let undoBefore = expectUndo ? undoTitle() : nil
+        guard let item = AXLogicProElements.menuItem(path: path) else {
+            return .error("Cannot find \(path.joined(separator: " › "))")
+        }
+        // AXEnabled can be stale (menus refresh only when opened); a disabled item fails the press.
+        guard AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("\(path.joined(separator: " › ")) is unavailable (nothing selected?)")
+        }
+        guard expectUndo else { return .success("{\"pressed\":\"\(path.joined(separator: " › "))\"}") }
+        let undo = AXHelpers.poll { () -> String? in
+            guard let title = undoTitle(), title != undoBefore else { return nil }
+            return title
+        }
+        guard let undo else {
+            return .failedAfterActing("Pressed \(path.joined(separator: " › ")) but Logic recorded no edit")
+        }
+        // Edit › Delete removes whatever has focus. Deleting tracks this way is never intended
+        // (track deletion is logic_tracks delete), so take it straight back.
+        if undo.hasSuffix("Tracks") || undo.hasSuffix("Track") {
+            _ = pressEditMenuItem(prefix: "Undo")
+            return .failedAfterActing("\(path.joined(separator: " › ")) would have deleted tracks (\(undo)); undone. Select regions first.")
+        }
+        return .success("{\"pressed\":\"\(path.joined(separator: " › "))\",\"undo\":\"\(undo)\"}")
+    }
+
+    /// Deletes every region via the Tracks area's local Edit menu, which acts on regions
+    /// regardless of keyboard focus. Refuses (and undoes) if Logic deleted tracks instead.
+    private func clearAllRegions() -> ChannelResult {
+        let undoBefore = undoTitle()
+        guard pressTracksAreaMenu(["Edit", "Select", "All"]) else {
+            return .error("Cannot press the Tracks area's Edit › Select › All")
+        }
+        usleep(200_000)
+        guard pressTracksAreaMenu(["Edit", "Delete"]) else {
+            return .error("Cannot press the Tracks area's Edit › Delete (no regions selected?)")
+        }
+        let undo = AXHelpers.poll { () -> String? in
+            guard let title = undoTitle(), title != undoBefore else { return nil }
+            return title
+        }
+        guard let undo else { return .success("{\"cleared\":0,\"note\":\"no regions to delete\"}") }
+        if undo.hasSuffix("Tracks") || undo.hasSuffix("Track") {
+            _ = pressEditMenuItem(prefix: "Undo")
+            return .failedAfterActing("Clearing regions would have deleted tracks (\(undo)); undone")
+        }
+        return .success("{\"cleared\":true,\"undo\":\"\(undo)\"}")
+    }
+
+    /// Opens a menu button in the main window's Tracks area (e.g. its local "Edit") and presses the item at `path`.
+    private func pressTracksAreaMenu(_ path: [String]) -> Bool {
+        guard let window = AXLogicProElements.mainWindow(),
+              let tracks = AXHelpers.findDescendant(of: window, role: kAXGroupRole, description: "Tracks", maxDepth: 6),
+              let button = AXHelpers.findDescendant(of: tracks, role: kAXMenuButtonRole, description: path[0], maxDepth: 4),
+              AXHelpers.performAction(button, kAXPressAction) else { return false }
+        usleep(300_000)
+        var menu: AXUIElement? = AXHelpers.findDescendant(of: button, role: kAXMenuRole, maxDepth: 2)
+        var item: AXUIElement?
+        for title in path.dropFirst() {
+            guard let current = menu,
+                  let next = AXHelpers.getChildren(current).first(where: { AXHelpers.getTitle($0) == title }) else {
+                if let menu { AXHelpers.performAction(menu, kAXCancelAction) }
+                return false
+            }
+            item = next
+            menu = AXHelpers.getChildren(next).first
+        }
+        guard let item, (AXHelpers.getAttribute(item, kAXEnabledAttribute) as Bool?) ?? true else { return false }
+        return AXHelpers.performAction(item, kAXPressAction)
+    }
+
+    /// Reads every marker from Logic's Marker List window (opened if needed, then closed again).
+    /// Each row holds bar/beat/division/tick sliders; the name is the row's cell description.
+    private func readMarkers() -> [MarkerState]? {
+        let alreadyOpen = AXLogicProElements.markerListWindow() != nil
+        if !alreadyOpen {
+            guard let item = AXLogicProElements.menuItem(path: ["Navigate", "Open Marker List"]),
+                  AXHelpers.performAction(item, kAXPressAction) else { return nil }
+        }
+        guard let window = AXHelpers.poll(AXLogicProElements.markerListWindow),
+              let table = AXHelpers.findDescendant(of: window, role: kAXTableRole, maxDepth: 6) else { return nil }
+        // A freshly opened list fills its rows a moment later; the footer ("3 Markers") says how many to expect.
+        if !alreadyOpen { usleep(300_000) }
+        let rows = AXHelpers.getChildren(table).filter { AXHelpers.getRole($0) == kAXRowRole }
+        let markers = rows.enumerated().compactMap { index, row -> MarkerState? in
+            let position = AXHelpers.findAllDescendants(of: row, role: kAXSliderRole, maxDepth: 3)
+                .prefix(4).compactMap { AXValueExtractors.extractSliderValue($0).map { String(Int($0)) } }
+            guard position.count == 4 else { return nil }
+            let name = AXHelpers.findAllDescendants(of: row, role: kAXCellRole, maxDepth: 2)
+                .compactMap(AXHelpers.getDescription).first { !$0.isEmpty } ?? ""
+            return MarkerState(id: index, name: name, position: position.joined(separator: " "))
+        }
+        if !alreadyOpen, let close: AXUIElement = AXHelpers.getAttribute(window, kAXCloseButtonAttribute) {
+            AXHelpers.performAction(close, kAXPressAction)
+        }
+        return markers
+    }
+
+    /// Moves to the marker, opens Navigate › Rename Marker, and sets the name only once an editable
+    /// field has focus; then confirms against the Marker List.
+    private func renameMarker(params: [String: String]) async -> ChannelResult {
+        guard let index = params["index"].flatMap(Int.init), let name = params["name"], !name.isEmpty else {
+            return .error("rename_marker requires 'index' and a non-empty 'name'")
+        }
+        guard let markers = readMarkers(), markers.indices.contains(index) else {
+            return .error("No marker at index \(index)")
+        }
+        if markers[index].name == name {
+            return .success("{\"marker\":\(index),\"name\":\"\(name)\",\"already\":true}")
+        }
+        // Navigate › Rename Marker edits the marker at the playhead in an inline field, but only
+        // when the Tracks window has focus: with the Marker List open it just selects the row.
+        if let list = AXLogicProElements.markerListWindow(),
+           let close: AXUIElement = AXHelpers.getAttribute(list, kAXCloseButtonAttribute) {
+            AXHelpers.performAction(close, kAXPressAction)
+        }
+        // Let the list close and focus settle back on the Tracks window before renaming.
+        _ = AXHelpers.poll { AXLogicProElements.markerListWindow() == nil ? true : nil }
+        try? await Task.sleep(for: .milliseconds(500))
+        let bar = markers[index].position.split(separator: " ").first.map(String.init) ?? "1"
+        guard gotoBar(params: ["bar": bar]).isSuccess else { return .error("Cannot move to marker \(index) at bar \(bar)") }
+        guard await bringLogicForward() else { return .error("Could not bring Logic Pro to the front") }
+        guard let item = AXLogicProElements.menuItem(path: ["Navigate", "Rename Marker"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press Navigate › Rename Marker")
+        }
+        guard let editor = AXHelpers.poll(focusedEditableTextField) else {
+            return .failedAfterActing("Rename Marker opened no editable field; nothing was typed")
+        }
+        guard AXHelpers.setAttribute(editor, kAXValueAttribute, name as CFTypeRef) else {
+            return .failedAfterActing("Logic rejected the marker name")
+        }
+        AXHelpers.performAction(editor, kAXConfirmAction)
+        if let dialog = AXLogicProElements.openDialog(),
+           let ok = AXHelpers.findDescendant(of: dialog, role: kAXButtonRole, title: "OK", maxDepth: 4) {
+            AXHelpers.performAction(ok, kAXPressAction)
+        }
+        let renamed = AXHelpers.poll { () -> Bool? in
+            guard let current = readMarkers(), current.indices.contains(index) else { return nil }
+            return current[index].name == name ? true : nil
+        }
+        guard renamed != nil else { return .failedAfterActing("Set marker \(index) to '\(name)' but the Marker List doesn't show it") }
+        return .success("{\"marker\":\(index),\"name\":\"\(name)\"}")
+    }
+
+    /// Navigate › Create Marker at the playhead, confirmed by the marker count.
+    private func createMarker() -> ChannelResult {
+        guard let before = readMarkers()?.count else { return .error("Cannot read Logic's Marker List") }
+        guard let item = AXLogicProElements.menuItem(path: ["Navigate", "Create Marker"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press Navigate › Create Marker")
+        }
+        let after = AXHelpers.poll { () -> Int? in
+            guard let count = readMarkers()?.count, count > before else { return nil }
+            return count
+        }
+        guard let after else {
+            return .failedAfterActing("Pressed Navigate › Create Marker but the marker count is still \(before) (a marker may already exist here)")
+        }
+        return .success("{\"created\":true,\"marker_count\":\(after)}")
+    }
+
+    private func undoTitle() -> String? {
+        guard let edit = AXLogicProElements.menuItem(path: ["Edit"]),
+              let menu = AXHelpers.getChildren(edit).first else { return nil }
+        return AXHelpers.getChildren(menu).compactMap { AXHelpers.getTitle($0) }.first { $0.hasPrefix("Undo") }
+    }
+
+    /// Presses Edit › Undo… / Redo… and reports which action it was ("Undo Rename Track").
+    /// Logic refreshes menu titles and enabled states only when a menu opens, and silently
+    /// ignores presses on stale items, so open the Edit menu first. (Titles can't confirm the
+    /// result: undoing two identical edits leaves them unchanged.)
+    private func pressEditMenuItem(prefix: String) -> ChannelResult {
+        guard let edit = AXLogicProElements.menuItem(path: ["Edit"]) else {
+            return .error("Cannot find the Edit menu")
+        }
+        AXHelpers.performAction(edit, kAXPressAction)
+        usleep(150_000)
+        guard let menu = AXHelpers.getChildren(edit).first else { return .error("Cannot open the Edit menu") }
+        guard let item = AXHelpers.getChildren(menu).first(where: {
+            let title = AXHelpers.getTitle($0) ?? ""
+            return title.hasPrefix(prefix) && !title.hasPrefix("\(prefix) History")
+        }) else {
+            AXHelpers.performAction(menu, kAXCancelAction)
+            return .error("Cannot find Edit › \(prefix)")
+        }
+        let title = AXHelpers.getTitle(item) ?? prefix
+        guard (AXHelpers.getAttribute(item, kAXEnabledAttribute) as Bool?) ?? true,
+              AXHelpers.performAction(item, kAXPressAction) else {
+            AXHelpers.performAction(menu, kAXCancelAction)
+            return .error("Nothing to \(prefix.lowercased())")
+        }
+        usleep(300_000)  // let the menu finish closing; an immediate click elsewhere can be lost
+        return .success("{\"pressed\":\"\(title)\"}")
+    }
+
+    private func deleteSelectedTrack() -> ChannelResult {
+        let before = AXLogicProElements.allTrackHeaders().count
+        guard let item = AXLogicProElements.menuItem(path: ["Track", "Delete Track"]),
+              AXHelpers.performAction(item, kAXPressAction) else {
+            return .error("Cannot press Track › Delete Track")
+        }
+        let deleted = AXHelpers.poll { AXLogicProElements.allTrackHeaders().count == before - 1 ? true : nil }
+        guard deleted != nil else {
+            return .failedAfterActing("Pressed Track › Delete Track but the track count is still \(before)")
+        }
+        return .success("{\"deleted\":true,\"track_count\":\(before - 1)}")
+    }
+
+    /// Makes Logic frontmost and raises its main window; synthetic clicks only land on the active app.
+    private func bringLogicForward() async -> Bool {
+        guard await ProcessUtils.ensureLogicProFrontmost() else { return false }
+        guard let window = AXLogicProElements.mainWindow() else { return false }
+        if (AXHelpers.getAttribute(window, kAXMinimizedAttribute) as Bool?) == true {
+            AXHelpers.setAttribute(window, kAXMinimizedAttribute, kCFBooleanFalse)
+            try? await Task.sleep(for: .milliseconds(600))  // un-minimize animation
+        }
+        AXHelpers.performAction(window, kAXRaiseAction)
+        // Raising doesn't make it key; menu commands like Rename Marker act on the key window.
+        AXHelpers.setAttribute(window, kAXMainAttribute, kCFBooleanTrue)
+        return true
+    }
+
+    /// Logic's focused element, if it is an editable text field.
+    private func focusedEditableTextField() -> AXUIElement? {
+        guard let app = AXLogicProElements.appRoot(),
+              let focused: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute),
+              AXHelpers.getRole(focused) == kAXTextFieldRole else { return nil }
+        var settable = DarwinBoolean(false)
+        AXUIElementIsAttributeSettable(focused, kAXValueAttribute as CFString, &settable)
+        return settable.boolValue ? focused : nil
     }
 
     // MARK: - Mixer
@@ -306,24 +873,35 @@ actor AccessibilityChannel: Channel {
         )
     }
 
+    /// Sets a track's volume (0.0–1.0) or pan (-1.0 left … 1.0 right) with the track header's
+    /// own sliders, which are always on screen (the Mixer window may not be), and confirms it.
     private func setMixerValue(params: [String: String], target: MixerTarget) -> ChannelResult {
-        guard let indexStr = params["track"], let index = Int(indexStr),
-              let valueStr = params["value"], let value = Double(valueStr) else {
+        guard let index = params["track"].flatMap(Int.init),
+              let value = params["value"].flatMap(Double.init) else {
             return .error("Missing 'track' or 'value' parameter")
         }
-        let element: AXUIElement?
-        switch target {
-        case .volume:
-            element = AXLogicProElements.findFader(trackIndex: index)
-        case .pan:
-            element = AXLogicProElements.findPanKnob(trackIndex: index)
+        guard let header = AXLogicProElements.findTrackHeader(at: index) else {
+            return .error("Track at index \(index) not found")
         }
-        guard let slider = element else {
-            return .error("Cannot find \(target) control for track \(index)")
+        let sliders = AXHelpers.findAllDescendants(of: header, role: kAXSliderRole, maxDepth: 2)
+        let slider = switch target {
+        case .volume: sliders.first { AXHelpers.getDescription($0) == "Volume" }
+        case .pan: sliders.first { ((AXHelpers.getAttribute($0, kAXHelpAttribute) as String?) ?? "").hasPrefix("Pan") }
         }
-        AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: value))
-        let label = target == .volume ? "volume" : "pan"
-        return .success("{\"\(label)\":\(value),\"track\":\(index)}")
+        guard let slider,
+              let minimum = (AXHelpers.getAttribute(slider, kAXMinValueAttribute) as NSNumber?)?.doubleValue,
+              let maximum = (AXHelpers.getAttribute(slider, kAXMaxValueAttribute) as NSNumber?)?.doubleValue else {
+            return .error("Cannot find the \(target) slider on track \(index)'s header")
+        }
+        let fraction = target == .volume ? value : (value + 1) / 2
+        guard (0...1).contains(fraction) else {
+            return .error(target == .volume ? "volume must be 0.0–1.0" : "pan must be -1.0–1.0")
+        }
+        let raw = (minimum + fraction * (maximum - minimum)).rounded()
+        guard Self.step(slider, to: raw) else {
+            return .failedAfterActing("Set track \(index) \(target) to \(raw) but Logic shows \(AXValueExtractors.extractSliderValue(slider) ?? -1)")
+        }
+        return .success("{\"track\":\(index),\"\(target)\":\(value),\"raw\":\(raw)}")
     }
 
     private func setMasterVolume(params: [String: String]) -> ChannelResult {

@@ -140,7 +140,8 @@ actor OSCChannel: Channel {
     private func send(_ message: OSCMessage, description: String) async -> ChannelResult {
         do {
             try await client.send(message: message)
-            return .success(description)
+            // A UDP send has no receipt; Logic may not even listen for OSC.
+            return .unverified("\(description); sent over OSC, Logic outcome is not verified")
         } catch {
             Log.error("OSC send failed: \(error)", subsystem: "osc")
             return .error("OSC send failed: \(error.localizedDescription)")

@@ -112,9 +112,10 @@ final class CoreMIDIChannelTests: XCTestCase {
 
     func testCoreMIDIReportsDroppedMessages() async {
         let channel = CoreMIDIChannel(engine: MIDIEngine())
+        await channel.stop()
         let result = await channel.execute(operation: "mmc.play", params: [:])
         guard case .error = result else {
-            return XCTFail("A stopped MIDI engine must report an error")
+            return XCTFail("A stopped MIDI channel must report an error")
         }
     }
 
@@ -149,5 +150,26 @@ final class CoreMIDIChannelTests: XCTestCase {
             return nil
         }
         return value?.takeRetainedValue() as String?
+    }
+
+    func testIdleChannelIsHealthyWithoutCreatingPorts() async {
+        let engine = MIDIEngine()
+        let channel = CoreMIDIChannel(engine: engine)
+        try? await channel.start()
+
+        let health = await channel.healthCheck()
+        let active = await engine.isActive
+
+        XCTAssertTrue(health.available, health.detail)
+        XCTAssertFalse(active, "start() must not create virtual MIDI ports")
+    }
+
+    func testStoppedChannelIsUnavailable() async {
+        let channel = CoreMIDIChannel(engine: MIDIEngine())
+        await channel.stop()
+
+        let health = await channel.healthCheck()
+
+        XCTAssertFalse(health.available)
     }
 }

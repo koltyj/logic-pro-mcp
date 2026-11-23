@@ -6,7 +6,7 @@ struct NavigateDispatcher {
         name: "logic_navigate",
         description: """
             Navigation and markers in Logic Pro. \
-            Commands: goto_bar, goto_marker, create_marker, delete_marker, \
+            Commands: goto_bar, get_markers, goto_marker, create_marker, delete_marker, \
             rename_marker, zoom_to_fit, set_zoom, toggle_view. \
             Params by command: \
             goto_bar -> { bar: Int }; \
@@ -49,26 +49,32 @@ struct NavigateDispatcher {
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
+        case "get_markers":
+            let result = await router.route(operation: "nav.get_markers")
+            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
+
         case "goto_marker":
-            if let index = params["index"]?.intValue {
-                let result = await router.route(
-                    operation: "nav.goto_marker",
-                    params: ["index": String(index)]
-                )
-                return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
+            let listed = await router.route(operation: "nav.get_markers")
+            let decoder = JSONDecoder()
+            guard listed.isSuccess,
+                  let markers = try? decoder.decode([MarkerState].self, from: Data(listed.message.utf8)) else {
+                return CallTool.Result(content: [.text("Cannot read markers: \(listed.message)")], isError: true)
             }
-            if let name = params["name"]?.stringValue {
-                let markers = await cache.getMarkers()
-                if let marker = markers.first(where: { $0.name.localizedCaseInsensitiveContains(name) }) {
-                    let result = await router.route(
-                        operation: "nav.goto_marker",
-                        params: ["index": String(marker.id)]
-                    )
-                    return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-                }
-                return CallTool.Result(content: [.text("No marker found matching '\(name)'")], isError: true)
+            let marker: MarkerState? = if let index = params["index"]?.intValue {
+                markers.first { $0.id == index }
+            } else if let name = params["name"]?.stringValue {
+                markers.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+                    ?? markers.first { $0.name.localizedCaseInsensitiveContains(name) }
+            } else { nil }
+            guard let marker, let bar = marker.position.split(separator: " ").first.flatMap({ Int($0) }) else {
+                let names = markers.map(\.name).joined(separator: ", ")
+                return CallTool.Result(content: [.text("No matching marker. Markers: \(names.isEmpty ? "none" : names)")], isError: true)
             }
-            return CallTool.Result(content: [.text("goto_marker requires 'index' or 'name' param")], isError: true)
+            let moved = await router.route(
+                operation: "transport.goto_position", params: ["bar": String(bar), "position": "\(bar).1.1.1"]
+            )
+            let text = moved.isSuccess ? "Playhead at marker '\(marker.name)' (bar \(bar))" : moved.message
+            return CallTool.Result(content: [.text(text)], isError: !moved.isSuccess)
 
         case "create_marker":
             let name = params["name"]?.stringValue ?? "Marker"
@@ -148,7 +154,7 @@ struct NavigateDispatcher {
 
         default:
             return CallTool.Result(
-                content: [.text("Unknown navigate command: \(command). Available: goto_bar, goto_marker, create_marker, delete_marker, rename_marker, zoom_to_fit, set_zoom, toggle_view")],
+                content: [.text("Unknown navigate command: \(command). Available: goto_bar, get_markers, goto_marker, create_marker, delete_marker, rename_marker, zoom_to_fit, set_zoom, toggle_view")],
                 isError: true
             )
         }

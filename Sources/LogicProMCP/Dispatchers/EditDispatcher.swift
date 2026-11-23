@@ -6,7 +6,7 @@ struct EditDispatcher {
         name: "logic_edit",
         description: """
             Editing actions in Logic Pro. \
-            Commands: undo, redo, cut, copy, paste, delete, select_all, \
+            Commands: undo, redo, cut, copy, paste, delete, select_all, clear_regions, \
             split, join, quantize, bounce_in_place, normalize, duplicate. \
             Params by command: \
             quantize -> { value: String } ("1/4", "1/8", "1/16", etc.); \
@@ -35,6 +35,10 @@ struct EditDispatcher {
         cache: StateCache
     ) async -> CallTool.Result {
         switch command {
+        case "clear_regions":
+            let result = await router.route(operation: "region.clear_all")
+            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
+
         case "undo":
             let result = await router.route(operation: "edit.undo")
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)

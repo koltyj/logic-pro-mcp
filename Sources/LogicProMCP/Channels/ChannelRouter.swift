@@ -7,22 +7,29 @@ import Foundation
 /// each fallback in order.
 actor ChannelRouter {
     private var channels: [ChannelID: any Channel] = [:]
+    private var dialogProbe: (@Sendable () async -> String?)?
+
+    /// Installs the check run before every state-changing operation.
+    func setDialogProbe(_ probe: @escaping @Sendable () async -> String?) {
+        dialogProbe = probe
+    }
 
     /// Static routing table: operation → ordered list of channels to try.
     /// Operations are prefixed by category (e.g., "transport.play", "track.mute").
     private static let routingTable: [String: [ChannelID]] = [
         // Transport — MMC via CoreMIDI, fallback to keyboard, then AppleScript
-        "transport.play":             [.coreMIDI, .cgEvent, .appleScript],
-        "transport.stop":             [.coreMIDI, .cgEvent, .appleScript],
-        "transport.record":           [.coreMIDI, .cgEvent, .appleScript],
+        "transport.play":             [.accessibility, .cgEvent],
+        "transport.stop":             [.accessibility, .cgEvent],
+        "transport.record":           [.accessibility, .cgEvent],
         "transport.pause":            [.coreMIDI, .cgEvent, .appleScript],
         "transport.rewind":           [.coreMIDI, .cgEvent],
         "transport.fast_forward":     [.coreMIDI, .cgEvent],
-        "transport.toggle_cycle":     [.cgEvent, .accessibility],
-        "transport.toggle_metronome": [.cgEvent, .accessibility],
-        "transport.set_tempo":        [.osc, .accessibility],
+        "transport.toggle_cycle":     [.accessibility, .cgEvent],
+        "transport.toggle_metronome": [.accessibility, .cgEvent],
+        "transport.toggle_count_in":  [.accessibility],
+        "transport.set_tempo":        [.accessibility, .osc],
         "transport.get_state":        [.accessibility],
-        "transport.goto_position":    [.coreMIDI, .cgEvent],
+        "transport.goto_position":    [.accessibility, .cgEvent],
         "transport.set_cycle_range":  [.accessibility],
 
         // Track state reading
@@ -31,22 +38,23 @@ actor ChannelRouter {
 
         // Track mutation — AX click, fallback to keyboard
         "track.select":               [.accessibility, .cgEvent],
-        "track.create_audio":         [.cgEvent, .accessibility],
-        "track.create_instrument":    [.cgEvent, .accessibility],
+        "track.create_audio":         [.accessibility, .cgEvent],
+        "track.create_instrument":    [.accessibility, .cgEvent],
         "track.create_drummer":       [.cgEvent, .accessibility],
-        "track.create_external_midi": [.cgEvent, .accessibility],
-        "track.delete":               [.cgEvent, .accessibility],
+        "track.create_external_midi": [.accessibility, .cgEvent],
+        "track.set_input_monitoring": [.accessibility],
+        "track.delete":               [.accessibility, .cgEvent],
         "track.rename":               [.accessibility],
         "track.set_mute":             [.accessibility, .cgEvent],
         "track.set_solo":             [.accessibility, .cgEvent],
         "track.set_arm":              [.accessibility, .cgEvent],
-        "track.duplicate":            [.cgEvent],
+        "track.duplicate":            [.accessibility],
         "track.set_color":            [.accessibility],
 
         // Mixer — OSC primary for continuous, AX fallback
         "mixer.get_state":            [.accessibility],
-        "mixer.set_volume":           [.osc, .accessibility],
-        "mixer.set_pan":              [.osc, .accessibility],
+        "mixer.set_volume":           [.accessibility, .osc],
+        "mixer.set_pan":              [.accessibility, .osc],
         "mixer.set_send":             [.osc, .accessibility],
         "mixer.set_output":           [.accessibility],
         "mixer.set_input":            [.accessibility],
@@ -79,7 +87,7 @@ actor ChannelRouter {
         // Navigation — keyboard primary, AX menu fallback
         "nav.goto_bar":               [.cgEvent, .accessibility],
         "nav.goto_marker":            [.cgEvent, .accessibility],
-        "nav.create_marker":          [.cgEvent],
+        "nav.create_marker":          [.accessibility],
         "nav.delete_marker":          [.cgEvent, .accessibility],
         "nav.rename_marker":          [.accessibility],
         "nav.get_markers":            [.accessibility],
@@ -87,13 +95,13 @@ actor ChannelRouter {
         "nav.set_zoom_level":         [.cgEvent],
 
         // Editing — keyboard primary
-        "edit.undo":                  [.cgEvent, .accessibility],
-        "edit.redo":                  [.cgEvent, .accessibility],
+        "edit.undo":                  [.accessibility],
+        "edit.redo":                  [.accessibility],
         "edit.cut":                   [.cgEvent],
         "edit.copy":                  [.cgEvent],
         "edit.paste":                 [.cgEvent],
-        "edit.delete":                [.cgEvent],
-        "edit.select_all":            [.cgEvent],
+        "edit.delete":                [.accessibility],
+        "edit.select_all":            [.accessibility],
         "edit.split":                 [.cgEvent],
         "edit.join":                  [.cgEvent, .accessibility],
         "edit.quantize":              [.cgEvent, .accessibility],
@@ -102,23 +110,24 @@ actor ChannelRouter {
 
         // Project — AppleScript for lifecycle, keyboard for save/bounce
         "project.new":                [.appleScript],
-        "project.open":               [.appleScript],
-        "project.save":               [.cgEvent, .appleScript],
+        "project.open":               [.accessibility],
+        "project.save":               [.accessibility, .cgEvent, .appleScript],
         "project.save_as":            [.appleScript],
-        "project.close":              [.cgEvent, .appleScript],
+        "project.close":              [.accessibility],
         "project.get_info":           [.accessibility],
-        "project.bounce":             [.cgEvent, .accessibility],
+        "project.bounce":             [.accessibility],
         "project.is_running":         [],  // No channel needed — pure process check
 
         // Views — keyboard toggle
-        "view.toggle_mixer":          [.cgEvent, .accessibility],
-        "view.toggle_piano_roll":     [.cgEvent, .accessibility],
+        "view.toggle_mixer":          [.accessibility, .cgEvent],
+        "view.toggle_piano_roll":     [.accessibility, .cgEvent],
         "view.toggle_score_editor":   [.cgEvent, .accessibility],
         "view.toggle_step_editor":    [.cgEvent, .accessibility],
-        "view.toggle_library":        [.cgEvent, .accessibility],
-        "view.toggle_inspector":      [.cgEvent, .accessibility],
+        "view.toggle_library":        [.accessibility, .cgEvent],
+        "view.toggle_inspector":      [.accessibility, .cgEvent],
 
         // Regions
+        "region.clear_all":           [.accessibility],
         "region.get_regions":         [.accessibility],
         "region.select":              [.accessibility],
         "region.loop":                [.accessibility, .cgEvent],
@@ -139,6 +148,9 @@ actor ChannelRouter {
         "automation.get_parameter":   [.accessibility],
 
         // System — no channel needed
+        "dialog.state":               [.accessibility],
+        "dialog.respond":             [.accessibility],
+
         "system.health":              [],
         "system.cache_state":         [],
         "system.refresh":             [],
@@ -177,12 +189,18 @@ actor ChannelRouter {
             return .error("Unknown operation: \(operation)")
         }
 
+        // Logic ignores (or queues) input behind a modal dialog, so fail fast with what it's asking.
+        let isRead = operation.contains(".get_") || operation.hasPrefix("dialog.")
+        if !isRead, !chain.isEmpty, let dialogProbe, let dialog = await dialogProbe() {
+            return .error("Blocked by Logic dialog: \(dialog). Answer it with logic_system dialog_respond {button}.")
+        }
+
         // Operations with empty chain don't need a channel
         if chain.isEmpty {
             return .success("No channel required for \(operation)")
         }
 
-        var lastError: String = "No channels available"
+        var errors: [String] = []
 
         for channelID in chain {
             guard let channel = channels[channelID] else {
@@ -190,11 +208,15 @@ actor ChannelRouter {
                 continue
             }
 
-            let health = await channel.healthCheck()
-            guard health.available else {
-                Log.debug("Channel \(channelID.rawValue) unhealthy: \(health.detail), trying next", subsystem: "router")
-                lastError = "Channel \(channelID.rawValue): \(health.detail)"
-                continue
+            // project.open launches Logic, so it can't require a channel that needs Logic running.
+            if operation != "project.open" {
+                let health = await channel.healthCheck()
+                guard health.available else {
+                    Log.debug("Channel \(channelID.rawValue) unhealthy: \(health.detail), trying next", subsystem: "router")
+                    errors.append("\(channelID.rawValue): \(health.detail)")
+                    continue
+                }
+
             }
 
             let result = await channel.execute(operation: operation, params: params)
@@ -205,13 +227,17 @@ actor ChannelRouter {
             case .unverified:
                 Log.debug("\(operation) was sent via \(channelID.rawValue) without Logic readback", subsystem: "router")
                 return result
+            case .failedAfterActing(let msg):
+                Log.debug("\(operation) acted via \(channelID.rawValue) but was not confirmed: \(msg)", subsystem: "router")
+                return result
             case .error(let msg):
                 Log.debug("\(operation) failed via \(channelID.rawValue): \(msg), trying next", subsystem: "router")
-                lastError = msg
+                errors.append("\(channelID.rawValue): \(msg)")
             }
         }
 
-        return .error("All channels exhausted for \(operation). Last error: \(lastError)")
+        let detail = errors.isEmpty ? "No channels available" : errors.joined(separator: " | ")
+        return .error("All channels exhausted for \(operation). \(detail)")
     }
 
     /// Get health status for all registered channels.

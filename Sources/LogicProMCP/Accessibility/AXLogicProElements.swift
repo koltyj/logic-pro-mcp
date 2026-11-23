@@ -12,9 +12,80 @@ enum AXLogicProElements {
     }
 
     /// Get the main window element.
+    /// The project's Tracks window, which holds the control bar and track list. Other windows
+    /// (Marker List, Mixer) can become "main", so prefer the Tracks window, then main, then any standard one.
     static func mainWindow() -> AXUIElement? {
         guard let app = appRoot() else { return nil }
-        return AXHelpers.getAttribute(app, kAXMainWindowAttribute)
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        if let tracks = windows.first(where: { (AXHelpers.getTitle($0) ?? "").hasSuffix(" - Tracks") }) { return tracks }
+        if let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute) { return main }
+        return windows.first {
+            (AXHelpers.getAttribute($0, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole
+        }
+    }
+
+    /// File URL of the project in the main window (AXDocument).
+    static func openProjectURL() -> URL? {
+        guard let window = mainWindow(),
+              let document: String = AXHelpers.getAttribute(window, kAXDocumentAttribute) else { return nil }
+        return URL(string: document)
+    }
+
+    /// File paths of the projects open in Logic's windows.
+    static func openProjectPaths() -> [String] {
+        guard let app = appRoot() else { return [] }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.compactMap { window in
+            let document: String? = AXHelpers.getAttribute(window, kAXDocumentAttribute)
+            return document.flatMap(URL.init(string:))?.path
+        }
+    }
+
+    static func markerListWindow() -> AXUIElement? {
+        guard let app = appRoot() else { return nil }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.first { (AXHelpers.getTitle($0) ?? "").hasSuffix("Marker List") }
+    }
+
+    /// The open Logic dialog window, if any.
+    static func openDialog() -> AXUIElement? {
+        guard let app = appRoot() else { return nil }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.first { window in
+            switch AXHelpers.getAttribute(window, kAXSubroleAttribute) as String? {
+            case kAXDialogSubrole?:
+                return true
+            case kAXFloatingWindowSubrole?:
+                // Logic shows some confirmations (e.g. Clean Up Project) as floating panels.
+                return AXHelpers.getChildren(window).contains {
+                    AXHelpers.getRole($0) == kAXButtonRole && ["OK", "Cancel"].contains(AXHelpers.getTitle($0) ?? "")
+                }
+            default:
+                return false
+            }
+        }
+    }
+
+    /// Answers Logic's "MIDI ports changed" alert (no text, a single Continue button), which appears
+    /// whenever virtual MIDI ports come or go, including the MCP's own. Returns true if it was dismissed.
+    static func dismissMIDIPortsAlert() -> Bool {
+        guard let dialog = openDialog() else { return false }
+        let texts = AXHelpers.findAllDescendants(of: dialog, role: kAXStaticTextRole, maxDepth: 4)
+            .compactMap { AXValueExtractors.extractTextValue($0) }.filter { !$0.isEmpty }
+        let buttons = AXHelpers.findAllDescendants(of: dialog, role: kAXButtonRole, maxDepth: 4)
+            .filter { !(AXHelpers.getTitle($0) ?? "").isEmpty }
+        guard texts.isEmpty, buttons.count == 1, AXHelpers.getTitle(buttons[0]) == "Continue" else { return false }
+        return AXHelpers.performAction(buttons[0], kAXPressAction)
+    }
+
+    /// Text and buttons of an open Logic dialog window, if any.
+    static func openDialogSummary() -> String? {
+        guard let dialog = openDialog() else { return nil }
+        let text = AXHelpers.findAllDescendants(of: dialog, role: kAXStaticTextRole, maxDepth: 4)
+            .compactMap { AXValueExtractors.extractTextValue($0) }
+        let buttons = AXHelpers.findAllDescendants(of: dialog, role: kAXButtonRole, maxDepth: 4)
+            .compactMap { AXHelpers.getTitle($0) }.filter { !$0.isEmpty }
+        return "\(text.joined(separator: " ")) [buttons: \(buttons.joined(separator: ", "))]"
     }
 
     // MARK: - Transport
@@ -266,6 +337,11 @@ enum AXLogicProElements {
     }
 
     /// Find the track name text field on a header.
+    static func findTrackInputMonitorButton(trackIndex: Int) -> AXUIElement? {
+        guard let header = findTrackHeader(at: trackIndex) else { return nil }
+        return findToggleByDescription(in: header, description: "Input Monitoring")
+    }
+
     static func findTrackNameField(trackIndex: Int) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
         return AXHelpers.findDescendant(of: header, role: kAXTextFieldRole, maxDepth: 4)

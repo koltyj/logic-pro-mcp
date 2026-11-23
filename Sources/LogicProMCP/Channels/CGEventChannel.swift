@@ -115,7 +115,7 @@ actor CGEventChannel: Channel {
             }
             // Activate only once the request is known to be actionable, so an
             // invalid call does not steal the user's active application.
-            guard await ensureFrontmost() else {
+            guard await ProcessUtils.ensureLogicProFrontmost() else {
                 return .error("Could not bring Logic Pro to the front; it would discard the keystroke")
             }
             guard postKeyEvent(keyCode: 44, flags: [], pid: pid) else {
@@ -129,7 +129,7 @@ actor CGEventChannel: Channel {
             // Focus can move during the 100ms wait, and Logic Pro would then
             // discard the remaining events while postKeyEvent still reported
             // success. Re-check rather than assume the earlier activation held.
-            guard await ensureFrontmost() else {
+            guard await ProcessUtils.ensureLogicProFrontmost() else {
                 return .error("Could not bring Logic Pro to the front; it would discard the keystroke")
             }
             guard postText(position, pid: pid), postKeyEvent(keyCode: 36, flags: [], pid: pid) else {
@@ -142,7 +142,7 @@ actor CGEventChannel: Channel {
             return .error("No keyboard shortcut mapped for: \(operation)")
         }
 
-        guard await ensureFrontmost() else {
+        guard await ProcessUtils.ensureLogicProFrontmost() else {
             return .error("Could not bring Logic Pro to the front; it would discard the keystroke")
         }
 
@@ -165,35 +165,6 @@ actor CGEventChannel: Channel {
     }
 
     // MARK: - Event Posting
-
-    /// Bring Logic Pro to the front and wait for the activation to land.
-    /// Logic Pro ignores events posted via postToPid() while another app is
-    /// active, so this is a precondition for delivery, not an optimisation.
-    private func ensureFrontmost() async -> Bool {
-        // CallTool handlers run in cancellable tasks. Never report success once
-        // cancelled, or execute() would go on to post a keystroke the client no
-        // longer wants.
-        if Task.isCancelled { return false }
-        if ProcessUtils.isLogicProFrontmost { return true }
-        guard ProcessUtils.activateLogicPro() else {
-            Log.error("activateLogicPro() failed", subsystem: "cgEvent")
-            return false
-        }
-        // Activation is asynchronous; poll briefly rather than sleeping blind.
-        for _ in 0..<20 {
-            do {
-                try await Task.sleep(for: .milliseconds(25))
-            } catch {
-                // Cancelled mid-wait. `try?` here would swallow that and let a
-                // stale keystroke through.
-                Log.debug("Cancelled while waiting for Logic Pro to activate", subsystem: "cgEvent")
-                return false
-            }
-            if ProcessUtils.isLogicProFrontmost { return true }
-        }
-        Log.warn("Logic Pro did not become frontmost within 500ms", subsystem: "cgEvent")
-        return false
-    }
 
     /// Post a key-down/key-up pair to a specific PID.
     private func postKeyEvent(keyCode: CGKeyCode, flags: CGEventFlags, pid: pid_t) -> Bool {

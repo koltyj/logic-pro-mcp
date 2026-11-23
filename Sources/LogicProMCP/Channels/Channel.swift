@@ -5,11 +5,16 @@ enum ChannelResult: Sendable {
     case success(String)
     case unverified(String)
     case error(String)
+    /// The channel acted on Logic but couldn't confirm the result. The router must not try
+    /// another channel: that could perform the action twice.
+    case failedAfterActing(String)
 
     /// True when the channel accepted the operation, even if Logic cannot confirm the outcome.
     var isSuccess: Bool {
-        if case .error = self { return false }
-        return true
+        switch self {
+        case .success, .unverified: return true
+        case .error, .failedAfterActing: return false
+        }
     }
 
     var message: String {
@@ -17,6 +22,7 @@ enum ChannelResult: Sendable {
         case .success(let msg): return msg
         case .unverified(let msg): return msg
         case .error(let msg): return msg
+        case .failedAfterActing(let msg): return msg
         }
     }
 }

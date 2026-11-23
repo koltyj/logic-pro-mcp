@@ -4,22 +4,33 @@ import Foundation
 actor CoreMIDIChannel: Channel {
     let id: ChannelID = .coreMIDI
     private let engine: MIDIEngine
+    private var stopped = false
 
     init(engine: MIDIEngine) {
         self.engine = engine
     }
 
+    /// Virtual ports are created on the first MIDI command, not at launch: each new port
+    /// makes Logic show a modal "MIDI ports changed" alert that blocks clicks on its window.
     func start() async throws {
-        try await engine.start()
-        Log.info("CoreMIDIChannel started", subsystem: "midi")
+        Log.info("CoreMIDIChannel ready (ports created on first use)", subsystem: "midi")
     }
 
     func stop() async {
+        stopped = true
         await engine.stop()
         Log.info("CoreMIDIChannel stopped", subsystem: "midi")
     }
 
     func execute(operation: String, params: [String: String]) async -> ChannelResult {
+        guard !stopped else {
+            return .error("CoreMIDI channel is stopped; message not sent")
+        }
+        do {
+            try await engine.start()  // no-op once running
+        } catch {
+            return .error("CoreMIDI failed to start: \(error)")
+        }
         switch operation {
         // MARK: - Transport (MMC)
 
@@ -246,12 +257,12 @@ actor CoreMIDIChannel: Channel {
     }
 
     func healthCheck() async -> ChannelHealth {
-        let active = await engine.isActive
-        if active {
+        if await engine.isActive {
             return .healthy(detail: "CoreMIDI client active, virtual ports created")
-        } else {
-            return .unavailable("CoreMIDI client not initialized")
         }
+        return stopped
+            ? .unavailable("CoreMIDI channel stopped")
+            : .healthy(detail: "CoreMIDI idle; virtual ports are created on the first MIDI command")
     }
 
     private static func delivery(_ accepted: Bool, _ description: String) -> ChannelResult {

@@ -6,9 +6,11 @@ struct SystemDispatcher {
         name: "logic_system",
         description: """
             Diagnostics and help for the Logic Pro MCP server. \
-            Commands: health, permissions, refresh_cache, help. \
+            Commands: health, permissions, refresh_cache, help, dialog_state, dialog_respond. \
             Params by command: \
             help -> { category: String } (returns full param docs for a dispatcher); \
+            dialog_state -> {} (text and buttons of an open Logic dialog); \
+            dialog_respond -> { button: String } (press that dialog button); \
             refresh_cache -> {} (force AX re-poll); \
             Others -> {}
             """,
@@ -69,6 +71,17 @@ struct SystemDispatcher {
             let status = PermissionChecker.check()
             return CallTool.Result(content: [.text(status.summary)], isError: false)
 
+        case "dialog_state":
+            let result = await router.route(operation: "dialog.state")
+            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
+
+        case "dialog_respond":
+            guard let button = params["button"]?.stringValue else {
+                return CallTool.Result(content: [.text("dialog_respond requires { button: String }")], isError: true)
+            }
+            let result = await router.route(operation: "dialog.respond", params: ["button": button])
+            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
+
         case "refresh_cache":
             await cache.recordToolAccess()
             return CallTool.Result(
@@ -107,7 +120,7 @@ struct SystemDispatcher {
                   toggle_count_in   -> {} — Toggle count-in
                   set_tempo         -> { tempo: Float } — Set BPM (20-999)
                   goto_position     -> { bar: Int } or { time: "HH:MM:SS:FF" }
-                  set_cycle_range   -> { start: Int, end: Int } — Bar numbers
+                  set_cycle_range   -> { start: Int, end: Int } — Not supported yet (needs the Set Left/Right Locator by Playhead key commands)
 
                 Read state via resource: logic://transport/state
                 """
